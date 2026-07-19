@@ -1,0 +1,12 @@
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg curl ca-certificates && \
+    curl -LsSf https://astral.sh/uv/install.sh | sh && rm -rf /var/lib/apt/lists/*
+ENV PATH="/root/.local/bin:$PATH"
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY src ./src
+RUN uv python install 3.12 && uv venv --python 3.12 /opt/venv && uv pip install --python /opt/venv/bin/python '.[backend]'
+ENV PATH="/opt/venv/bin:$PATH"
+EXPOSE 8791
+CMD ["uvicorn", "epsilon_flow.backend:app", "--host", "0.0.0.0", "--port", "8791"]

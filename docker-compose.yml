@@ -1,0 +1,42 @@
+services:
+  backend-cpu:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cpu
+    profiles: ["cpu"]
+    ports:
+      - "127.0.0.1:8791:8791"
+    environment:
+      EPSILON_FLOW_MODEL: ${EPSILON_FLOW_MODEL:-Systran/faster-whisper-large-v3-turbo}
+      EPSILON_FLOW_DEVICE: cpu
+      EPSILON_FLOW_COMPUTE_TYPE: ${EPSILON_FLOW_COMPUTE_TYPE:-int8}
+      HF_HOME: /models/huggingface
+    volumes:
+      - epsilon-flow-models:/models
+    restart: unless-stopped
+
+  backend-cuda:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cuda
+    profiles: ["cuda"]
+    ports:
+      - "127.0.0.1:8791:8791"
+    environment:
+      EPSILON_FLOW_MODEL: ${EPSILON_FLOW_MODEL:-Systran/faster-whisper-large-v3-turbo}
+      EPSILON_FLOW_DEVICE: cuda
+      EPSILON_FLOW_COMPUTE_TYPE: ${EPSILON_FLOW_COMPUTE_TYPE:-float16}
+      HF_HOME: /models/huggingface
+    volumes:
+      - epsilon-flow-models:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  epsilon-flow-models:

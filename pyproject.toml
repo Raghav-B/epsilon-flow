@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "epsilon-flow"
+version = "0.1.0"
+description = "Private, local-first Linux dictation with faster-whisper"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = {text = "MIT"}
+authors = [{name = "Epsilon", email = "epsilon@floramis.com"}]
+dependencies = ["platformdirs>=4.2", "requests>=2.32"]
+
+[project.optional-dependencies]
+backend = [
+  "fastapi>=0.115",
+  "faster-whisper>=1.1",
+  "python-multipart>=0.0.12",
+  "uvicorn[standard]>=0.30",
+]
+test = ["pytest>=8.3", "httpx>=0.27"]
+
+[project.scripts]
+epsilon-flow = "epsilon_flow.cli:main"
+epsilon-flow-tray = "epsilon_flow.tray:main"
+epsilon-flow-backend = "epsilon_flow.backend:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/epsilon_flow"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]

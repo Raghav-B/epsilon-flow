@@ -1,0 +1,129 @@
+"""GTK3 tray, reusable listener, and transcript snippets surface."""
+from __future__ import annotations
+
+import signal
+import socket
+import threading
+
+from .controller import DictationController
+from .dictation import run_dictation
+from .history import TranscriptHistory
+from .listener import DictationListener
+from .settings import SettingsStore, state_dir
+from .settings_window import create_settings_window
+
+
+def main() -> int:
+    import gi
+    gi.require_version("AyatanaAppIndicator3", "0.1")
+    gi.require_version("Gtk", "3.0")
+    from gi.repository import AyatanaAppIndicator3 as AppIndicator, GLib, Gtk
+
+    store = SettingsStore()
+    active: dict[str, DictationController | None] = {"controller": None}
+
+    def stop() -> None:
+        controller = active["controller"]
+        if controller:
+            controller.stop_requested = True
+
+    def cancel() -> None:
+        controller = active["controller"]
+        if controller:
+            controller.cancel_requested = True
+
+    listener = DictationListener(stop, cancel, TranscriptHistory(limit=store.load().history_limit))
+
+    def start(_item=None) -> None:
+        if active["controller"] is not None:
+            listener.present()
+            return
+        controller = DictationController()
+        if not controller.acquire():
+            controller.signal_active_recording(signal.SIGUSR1)
+            return
+        active["controller"] = controller
+        listener.present_for_start()
+
+        def worker() -> None:
+            try:
+                result = run_dictation(store.load(), controller)
+                GLib.idle_add(listener.hide)
+                if result.get("cancelled"):
+                    notify("Epsilon Flow", "Recording discarded")
+                elif result.get("text"):
+                    notify("Epsilon Flow", "Transcript ready")
+                else:
+                    notify("Epsilon Flow", "No speech detected")
+            except Exception as exc:
+                notify("Epsilon Flow failed", str(exc))
+                GLib.idle_add(listener.hide)
+            finally:
+                controller.release()
+                active["controller"] = None
+
+        threading.Thread(target=worker, daemon=True).start()
+        GLib.timeout_add(100, lambda: _sync_recording(listener, controller))
+
+    def notify(title: str, body: str) -> None:
+        from subprocess import DEVNULL, run
+        run(["notify-send", title, body], stdout=DEVNULL, stderr=DEVNULL, check=False)
+
+    socket_path = state_dir() / "tray.sock"
+    socket_path.parent.mkdir(parents=True, exist_ok=True)
+    socket_path.unlink(missing_ok=True)
+    command_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    command_socket.bind(str(socket_path))
+    command_socket.listen(2)
+
+    def listen_for_commands() -> None:
+        while True:
+            try:
+                connection, _address = command_socket.accept()
+            except OSError:
+                return
+            with connection:
+                command = connection.recv(32).decode("utf-8", errors="replace").strip()
+            if command == "trigger":
+                GLib.idle_add(start)
+
+    threading.Thread(target=listen_for_commands, daemon=True).start()
+
+    indicator = AppIndicator.Indicator.new(
+        "epsilon-flow", "audio-input-microphone-symbolic", AppIndicator.IndicatorCategory.APPLICATION_STATUS
+    )
+    indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE)
+    menu = Gtk.Menu()
+    for label, callback in (
+        ("Start Dictation", start),
+        ("Open Transcript Snippets", lambda _item: listener.present_snippets()),
+        ("Settings…", lambda _item: _show_settings(create_settings_window(store))),
+        ("Quit", lambda _item: Gtk.main_quit()),
+    ):
+        item = Gtk.MenuItem(label=label)
+        item.connect("activate", callback)
+        menu.append(item)
+    menu.show_all()
+    indicator.set_menu(menu)
+    try:
+        Gtk.main()
+    finally:
+        command_socket.close()
+        socket_path.unlink(missing_ok=True)
+    return 0
+
+
+def _sync_recording(listener, controller: DictationController) -> bool:
+    if controller.handle is None:
+        return False
+    listener.set_recording(True, "Recording")
+    return True
+
+
+def _show_settings(window) -> None:
+    window.show_all()
+    window.present()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
