@@ -192,12 +192,14 @@ class DictationListener(Gtk.Window):
 
     def __init__(
         self,
+        on_start: Callable[[], None],
         on_stop: Callable[[], None],
         on_cancel: Callable[[], None],
         history: TranscriptHistory | None = None,
     ) -> None:
         super().__init__(title="Epsilon Flow")
         self.set_name("listener_window")
+        self.on_start = on_start
         self.on_stop = on_stop
         self.on_cancel = on_cancel
         self.history = history or TranscriptHistory()
@@ -315,19 +317,19 @@ class DictationListener(Gtk.Window):
         shell.set_size_request(LISTENER_WIDTH, LISTENER_HEIGHT)
         root.pack_start(shell, False, False, 0)
 
-        dot = Gtk.Box()
-        dot.set_name("recording_dot")
-        dot.set_valign(Gtk.Align.CENTER)
-        dot.set_margin_start(16)
-        shell.pack_start(dot, False, False, 0)
+        self.recording_dot = Gtk.Box()
+        self.recording_dot.set_name("recording_dot")
+        self.recording_dot.set_valign(Gtk.Align.CENTER)
+        self.recording_dot.set_margin_start(16)
+        shell.pack_start(self.recording_dot, False, False, 0)
 
         labels = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         labels.set_valign(Gtk.Align.CENTER)
         shell.pack_start(labels, True, True, 0)
-        title = Gtk.Label(label="Listening")
-        title.set_name("title")
-        title.set_xalign(0)
-        labels.pack_start(title, False, False, 0)
+        self.title_label = Gtk.Label(label="Ready")
+        self.title_label.set_name("title")
+        self.title_label.set_xalign(0)
+        labels.pack_start(self.title_label, False, False, 0)
         self.elapsed = Gtk.Label(label="00:00 / 1:00:00")
         self.elapsed.set_name("elapsed")
         self.elapsed.set_margin_end(2)
@@ -347,6 +349,15 @@ class DictationListener(Gtk.Window):
         )
         self.snippets_button.connect("clicked", self.toggle_drawer)
         shell.pack_end(self.snippets_button, False, False, 14)
+
+        self.start_button = self.icon_button(
+            "media-playback-start-symbolic",
+            "Start dictation",
+            "Start recording a new dictation",
+            name="stop_button",
+        )
+        self.start_button.connect("clicked", self.start_recording)
+        shell.pack_end(self.start_button, False, False, 0)
 
         self.cancel_button = self.icon_button(
             self.first_available_icon("window-close-symbolic", "edit-delete-symbolic", "process-stop-symbolic"),
@@ -384,7 +395,7 @@ class DictationListener(Gtk.Window):
         device_toast.pack_start(self.device_toast_label, False, False, 0)
         self.device_toast_revealer.add(device_toast)
 
-        self.set_recording(False, "Starting microphone…")
+        self.set_idle("Ready")
         self.set_device_status(None, None)
         GLib.timeout_add(50, self.animate_meter)
         GLib.timeout_add(250, self.update_elapsed)
@@ -425,10 +436,11 @@ class DictationListener(Gtk.Window):
         self.recording_started = time.monotonic()
         self.limit_warning_visible = False
         self.elapsed.set_text("00:00 / 1:00:00")
-        self.set_recording(False, "Starting microphone…")
+        self.set_recording(True, "Starting microphone…")
         self.set_device_status(self.active_device, self.fallback_reason)
         self.show_all()
         self.drawer_revealer.set_reveal_child(False)
+        self.apply_mode_controls()
         self.force_above()
         self.present()
         self.schedule_centering()
@@ -436,8 +448,11 @@ class DictationListener(Gtk.Window):
 
     def present_snippets(self) -> None:
         self.refresh_snippets()
+        if not self.recording:
+            self.set_idle("Transcript snippets")
         self.show_all()
         self.drawer_revealer.set_reveal_child(True)
+        self.apply_mode_controls()
         self.force_above()
         self.present()
         self.schedule_centering()
@@ -523,15 +538,32 @@ class DictationListener(Gtk.Window):
         self.force_above()
         return False
 
-    def set_recording(self, recording: bool, _subtitle: str) -> None:
+    def set_recording(self, recording: bool, title: str) -> None:
         self.recording = recording
-        self.stop_button.set_sensitive(recording)
-        self.cancel_button.set_sensitive(recording)
+        self.title_label.set_text(title)
+        self.apply_mode_controls()
         self.refresh_device_toast()
         if recording and self.get_visible():
             self.start_audio_meter()
         if not recording:
             self.stop_audio_meter()
+
+    def set_idle(self, title: str = "Ready") -> None:
+        self.recording_started = 0.0
+        self.elapsed.set_text("")
+        self.set_recording(False, title)
+
+    def apply_mode_controls(self) -> None:
+        self.recording_dot.set_visible(self.recording)
+        self.elapsed.set_visible(self.recording)
+        self.meter.set_visible(self.recording)
+        self.stop_button.set_visible(self.recording)
+        self.cancel_button.set_visible(self.recording)
+        self.start_button.set_visible(not self.recording)
+
+    def start_recording(self, _button: Gtk.Button) -> None:
+        if not self.recording:
+            self.on_start()
 
     def set_device_status(self, active_device: str | None, fallback_reason: str | None = None) -> None:
         self.active_device = active_device

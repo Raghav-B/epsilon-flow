@@ -22,6 +22,7 @@ def main() -> int:
 
     store = SettingsStore()
     active: dict[str, DictationController | None] = {"controller": None}
+    settings_surface: dict[str, object | None] = {"window": None}
 
     def stop() -> None:
         controller = active["controller"]
@@ -33,7 +34,7 @@ def main() -> int:
         if controller:
             controller.cancel_requested = True
 
-    listener = DictationListener(stop, cancel, TranscriptHistory(limit=store.load().history_limit))
+    listener = DictationListener(lambda: start(), stop, cancel, TranscriptHistory(limit=store.load().history_limit))
 
     def start(_item=None) -> None:
         if active["controller"] is not None:
@@ -84,6 +85,14 @@ def main() -> int:
         listener.set_finishing("Finishing recording…")
         listener.hide()
 
+    def open_settings(_item=None) -> None:
+        window = settings_surface["window"]
+        if window is None:
+            window = create_settings_window(store)
+            settings_surface["window"] = window
+            window.connect("destroy", lambda _window: settings_surface.update(window=None))
+        _show_settings(window)
+
     def notify(title: str, body: str) -> None:
         executable = shutil.which("notify-send")
         if not executable:
@@ -119,7 +128,7 @@ def main() -> int:
     for label, callback in (
         ("Start Dictation", start),
         ("Open Transcript Snippets", lambda _item: listener.present_snippets()),
-        ("Settings…", lambda _item: _show_settings(create_settings_window(store))),
+        ("Settings…", open_settings),
         ("Quit", lambda _item: Gtk.main_quit()),
     ):
         item = Gtk.MenuItem(label=label)
@@ -143,8 +152,24 @@ def _sync_recording(listener, controller: DictationController) -> bool:
 
 
 def _show_settings(window) -> None:
+    import gi
+
+    gi.require_version("Gtk", "3.0")
+    from gi.repository import Gtk
+
+    # AppIndicator activation does not always grant a new GTK window focus on
+    # GNOME. Keep this short-lived settings surface above normal app windows so
+    # it cannot silently open behind the workspace.
+    window.set_keep_above(True)
+    window.set_focus_on_map(True)
     window.show_all()
-    window.present()
+    window.realize()
+    native_window = window.get_window()
+    if native_window is not None:
+        native_window.set_keep_above(True)
+        native_window.raise_()
+        native_window.focus(Gtk.get_current_event_time())
+    window.present_with_time(Gtk.get_current_event_time())
 
 
 if __name__ == "__main__":

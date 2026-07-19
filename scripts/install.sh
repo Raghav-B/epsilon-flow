@@ -61,12 +61,12 @@ fi
 # systemd accepts a start request before Uvicorn has bound localhost. Wait for
 # the actual service contract so the first dictation cannot race startup.
 for _attempt in $(seq 1 20); do
-    if curl --fail --silent --show-error --max-time 1 http://127.0.0.1:8791/health >/dev/null; then
+    if curl --fail --silent --max-time 1 http://127.0.0.1:8791/health >/dev/null 2>&1; then
         break
     fi
     sleep 1
 done
-if ! curl --fail --silent --show-error --max-time 1 http://127.0.0.1:8791/health >/dev/null; then
+if ! curl --fail --silent --max-time 1 http://127.0.0.1:8791/health >/dev/null 2>&1; then
     printf 'The backend service did not become healthy. Inspect with: scripts/service.sh native-logs\n' >&2
     exit 1
 fi
