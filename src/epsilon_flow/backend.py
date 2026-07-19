@@ -14,9 +14,10 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from .backend_logic import ModelConfig, is_cuda_oom, is_loopback_host, resolve_model_config
+from .settings import FIXED_MODEL
 
 
-DEFAULT_MODEL = os.environ.get("EPSILON_FLOW_MODEL", "Systran/faster-whisper-large-v3-turbo")
+DEFAULT_MODEL = os.environ.get("EPSILON_FLOW_MODEL", FIXED_MODEL)
 DEFAULT_DEVICE = os.environ.get("EPSILON_FLOW_DEVICE", "auto")
 DEFAULT_COMPUTE_TYPE = os.environ.get("EPSILON_FLOW_COMPUTE_TYPE", "default")
 MAX_UPLOAD_BYTES = int(os.environ.get("EPSILON_FLOW_MAX_UPLOAD_BYTES", str(100 * 1024 * 1024)))

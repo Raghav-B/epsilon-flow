@@ -14,6 +14,7 @@ from platformdirs import user_config_path, user_state_path
 
 DELIVERY_MODES = {"copy", "paste", "type", "none"}
 DEVICES = {"auto", "cpu", "cuda"}
+FIXED_MODEL = "turbo"
 
 
 @dataclass
@@ -24,7 +25,7 @@ class AppSettings:
     history_enabled: bool = True
     history_limit: int = 30
     microphone: str = "default"
-    model: str = "deepdml/faster-whisper-large-v3-turbo-ct2"
+    model: str = FIXED_MODEL
     device: str = "auto"
     compute_type: str = "default"
     language: str = "auto"
@@ -36,6 +37,9 @@ class AppSettings:
     def from_mapping(cls, payload: dict[str, Any]) -> "AppSettings":
         known = {field.name for field in fields(cls)}
         values = {key: value for key, value in payload.items() if key in known}
+        # Model choice is intentionally hidden in this release. Migrate stale
+        # IDs from older settings files onto Faster-Whisper's supported alias.
+        values["model"] = FIXED_MODEL
         settings = cls(**values)
         settings.validate()
         return settings

@@ -36,7 +36,7 @@ def test_model_status_reports_loaded_runtime(monkeypatch):
         json=lambda: {
             "model_loaded": True,
             "model": {
-                "model": "deepdml/faster-whisper-large-v3-turbo-ct2",
+                "model": "turbo",
                 "device": "cpu",
                 "compute_type": "int8",
             },

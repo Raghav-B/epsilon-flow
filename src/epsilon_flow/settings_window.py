@@ -131,7 +131,7 @@ def _model_status_text(service_url: str, configured_model: str) -> str:
     device = str(config.get("device", "unknown")).upper()
     compute_type = str(config.get("compute_type", "default"))
     model = str(config.get("model") or configured_model)
-    model_name = friendly if "large-v3-turbo" in model else model
+    model_name = friendly if model in {"turbo", "large-v3-turbo"} or "large-v3-turbo" in model else model
     return f"{model_name} · {device} / {compute_type}"
 
 

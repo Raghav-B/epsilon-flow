@@ -2,7 +2,7 @@ from dataclasses import replace
 
 import pytest
 
-from epsilon_flow.settings import AppSettings, SettingsStore
+from epsilon_flow.settings import FIXED_MODEL, AppSettings, SettingsStore
 
 
 def test_settings_round_trip_and_private_permissions(tmp_path):
@@ -18,7 +18,15 @@ def test_desktop_defaults_to_login_tray_and_fixed_public_model():
     settings = AppSettings()
 
     assert settings.start_at_login is True
-    assert settings.model == "deepdml/faster-whisper-large-v3-turbo-ct2"
+    assert settings.model == FIXED_MODEL
+
+
+def test_settings_migrates_stale_hidden_model(tmp_path):
+    store = SettingsStore(tmp_path)
+    store.config_dir.mkdir(parents=True, exist_ok=True)
+    store.path.write_text('{"model": "Systran/faster-whisper-large-v3-turbo"}')
+
+    assert store.load().model == FIXED_MODEL
 
 
 def test_settings_reject_remote_service():
