@@ -116,11 +116,18 @@ window#listener_window {
   box-shadow: none;
 }
 
-#recording_dot {
-  background: #ff3f6e;
+#recording_dot, #idle_dot {
   border-radius: 5px;
   min-width: 10px;
   min-height: 10px;
+}
+
+#recording_dot {
+  background: #ff3f6e;
+}
+
+#idle_dot {
+  background: #4a4c57;
 }
 
 #action_button, #danger_button, #stop_button {
@@ -361,8 +368,8 @@ class DictationListener(Gtk.Window):
 
         self.cancel_button = self.icon_button(
             self.first_available_icon("window-close-symbolic", "edit-delete-symbolic", "process-stop-symbolic"),
-            "Cancel",
-            "Discard this recording without transcription or delivery",
+            "Cancel or close",
+            "Close this window; while recording, discard the current capture",
             name="danger_button",
         )
         self.cancel_button.connect("clicked", self.cancel_recording)
@@ -449,7 +456,7 @@ class DictationListener(Gtk.Window):
     def present_snippets(self) -> None:
         self.refresh_snippets()
         if not self.recording:
-            self.set_idle("Transcript snippets")
+            self.set_idle("Press to start")
         self.show_all()
         self.drawer_revealer.set_reveal_child(True)
         self.apply_mode_controls()
@@ -541,6 +548,7 @@ class DictationListener(Gtk.Window):
     def set_recording(self, recording: bool, title: str) -> None:
         self.recording = recording
         self.title_label.set_text(title)
+        self.recording_dot.set_name("recording_dot" if recording else "idle_dot")
         self.apply_mode_controls()
         self.refresh_device_toast()
         if recording and self.get_visible():
@@ -548,18 +556,28 @@ class DictationListener(Gtk.Window):
         if not recording:
             self.stop_audio_meter()
 
-    def set_idle(self, title: str = "Ready") -> None:
+    def set_idle(self, title: str = "Press to start") -> None:
         self.recording_started = 0.0
-        self.elapsed.set_text("")
+        self.elapsed.set_text("00:00 / 1:00:00")
         self.set_recording(False, title)
 
     def apply_mode_controls(self) -> None:
-        self.recording_dot.set_visible(self.recording)
-        self.elapsed.set_visible(self.recording)
-        self.meter.set_visible(self.recording)
+        # Idle transcript mode keeps the same geometry as active dictation:
+        # a parked timer, static meter, play action, and close control. This
+        # makes starting recording an in-place state change instead of a jump
+        # between two visually unrelated launchers.
+        self.recording_dot.set_visible(True)
+        self.elapsed.set_visible(True)
+        self.meter.set_visible(True)
         self.stop_button.set_visible(self.recording)
-        self.cancel_button.set_visible(self.recording)
+        self.cancel_button.set_visible(True)
         self.start_button.set_visible(not self.recording)
+        if self.recording:
+            self.cancel_button.set_tooltip_text("Discard this recording without transcription or delivery")
+            self.cancel_button.get_accessible().set_name("Cancel recording")
+        else:
+            self.cancel_button.set_tooltip_text("Close the dictation window")
+            self.cancel_button.get_accessible().set_name("Close")
 
     def start_recording(self, _button: Gtk.Button) -> None:
         if not self.recording:
@@ -613,6 +631,7 @@ class DictationListener(Gtk.Window):
 
     def cancel_recording(self, _button: Gtk.Button) -> None:
         if not self.recording:
+            self.hide()
             return
         self.set_finishing("Discarding recording…")
         self.hide()
