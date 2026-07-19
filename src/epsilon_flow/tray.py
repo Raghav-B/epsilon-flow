@@ -53,9 +53,12 @@ def main() -> int:
             active["controller"] = None
             return False
 
+        def report_audio_level(level: float) -> None:
+            GLib.idle_add(listener.set_audio_level, level)
+
         def worker() -> None:
             try:
-                result = run_dictation(store.load(), controller)
+                result = run_dictation(store.load(), controller, on_audio_level=report_audio_level)
                 GLib.idle_add(listener.hide)
                 if result.get("cancelled"):
                     notify("Epsilon Flow", "Recording discarded")

@@ -4,10 +4,6 @@ from __future__ import annotations
 
 import math
 import os
-import shutil
-import struct
-import subprocess
-import threading
 import time
 from datetime import datetime
 from typing import Callable
@@ -216,8 +212,6 @@ class DictationListener(Gtk.Window):
         self.audio_level = 0.0
         self.last_audio_at = 0.0
         self.meter_phase = 0
-        self.meter_process: subprocess.Popen[bytes] | None = None
-        self.meter_thread: threading.Thread | None = None
         self.copy_feedback_source_id: int | None = None
         self.last_allocation_size: tuple[int, int] | None = None
         self.active_device: str | None = None
@@ -349,22 +343,18 @@ class DictationListener(Gtk.Window):
         self.meter.connect("draw", self.draw_meter)
         shell.pack_start(self.meter, False, False, 0)
 
-        self.snippets_button = self.icon_button(
-            "view-list-symbolic",
-            "Snippets",
-            "Show recent local transcript snippets",
-        )
-        self.snippets_button.connect("clicked", self.toggle_drawer)
-        shell.pack_end(self.snippets_button, False, False, 14)
+        actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        actions.set_margin_end(14)
+        shell.pack_end(actions, False, False, 0)
 
-        self.start_button = self.icon_button(
+        self.record_button = self.icon_button(
             "media-playback-start-symbolic",
             "Start dictation",
             "Start recording a new dictation",
             name="stop_button",
         )
-        self.start_button.connect("clicked", self.start_recording)
-        shell.pack_end(self.start_button, False, False, 0)
+        self.record_button.connect("clicked", self.toggle_recording)
+        actions.pack_start(self.record_button, False, False, 0)
 
         self.cancel_button = self.icon_button(
             self.first_available_icon("window-close-symbolic", "edit-delete-symbolic", "process-stop-symbolic"),
@@ -373,16 +363,15 @@ class DictationListener(Gtk.Window):
             name="danger_button",
         )
         self.cancel_button.connect("clicked", self.cancel_recording)
-        shell.pack_end(self.cancel_button, False, False, 0)
+        actions.pack_start(self.cancel_button, False, False, 0)
 
-        self.stop_button = self.icon_button(
-            "media-playback-stop-symbolic",
-            "Stop",
-            "Stop recording and transcribe the captured audio",
-            name="stop_button",
+        self.snippets_button = self.icon_button(
+            "view-list-symbolic",
+            "Snippets",
+            "Show recent local transcript snippets",
         )
-        self.stop_button.connect("clicked", self.stop_recording)
-        shell.pack_end(self.stop_button, False, False, 0)
+        self.snippets_button.connect("clicked", self.toggle_drawer)
+        actions.pack_start(self.snippets_button, False, False, 0)
 
         self.device_toast_revealer = Gtk.Revealer()
         self.device_toast_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
@@ -481,8 +470,6 @@ class DictationListener(Gtk.Window):
         self.force_above()
         self.schedule_centering()
         self.schedule_focus()
-        if self.recording:
-            self.start_audio_meter()
         return False
 
     def on_realize(self, _widget: Gtk.Widget) -> None:
@@ -549,12 +536,10 @@ class DictationListener(Gtk.Window):
         self.recording = recording
         self.title_label.set_text(title)
         self.recording_dot.set_name("recording_dot" if recording else "idle_dot")
+        if not recording:
+            self.audio_level = 0.0
         self.apply_mode_controls()
         self.refresh_device_toast()
-        if recording and self.get_visible():
-            self.start_audio_meter()
-        if not recording:
-            self.stop_audio_meter()
 
     def set_idle(self, title: str = "Press to start") -> None:
         self.recording_started = 0.0
@@ -569,19 +554,42 @@ class DictationListener(Gtk.Window):
         self.recording_dot.set_visible(True)
         self.elapsed.set_visible(True)
         self.meter.set_visible(True)
-        self.stop_button.set_visible(self.recording)
+        self.record_button.set_visible(True)
         self.cancel_button.set_visible(True)
-        self.start_button.set_visible(not self.recording)
         if self.recording:
+            self.set_button_icon(self.record_button, "media-playback-stop-symbolic")
+            self.record_button.set_tooltip_text("Stop recording and transcribe the captured audio")
+            self.record_button.get_accessible().set_name("Stop and transcribe")
             self.cancel_button.set_tooltip_text("Discard this recording without transcription or delivery")
             self.cancel_button.get_accessible().set_name("Cancel recording")
         else:
+            self.set_button_icon(self.record_button, "media-playback-start-symbolic")
+            self.record_button.set_tooltip_text("Start recording a new dictation")
+            self.record_button.get_accessible().set_name("Start dictation")
             self.cancel_button.set_tooltip_text("Close the dictation window")
             self.cancel_button.get_accessible().set_name("Close")
+
+    @staticmethod
+    def set_button_icon(button: Gtk.Button, icon: str) -> None:
+        image = Gtk.Image.new_from_icon_name(icon, Gtk.IconSize.BUTTON)
+        button.set_image(image)
+        button.set_always_show_image(True)
+
+    def toggle_recording(self, button: Gtk.Button) -> None:
+        if self.recording:
+            self.stop_recording(button)
+        else:
+            self.start_recording(button)
 
     def start_recording(self, _button: Gtk.Button) -> None:
         if not self.recording:
             self.on_start()
+
+    def set_audio_level(self, level: float) -> bool:
+        self.audio_level = max(0.0, min(1.0, level))
+        self.last_audio_at = time.monotonic()
+        self.meter.queue_draw()
+        return False
 
     def set_device_status(self, active_device: str | None, fallback_reason: str | None = None) -> None:
         self.active_device = active_device
@@ -763,56 +771,6 @@ class DictationListener(Gtk.Window):
         self.history.clear()
         self.refresh_snippets()
 
-    def start_audio_meter(self) -> None:
-        if self.meter_process is not None and self.meter_process.poll() is None:
-            return
-
-        recorder = shutil.which("pw-record")
-        if not recorder:
-            return
-
-        command = [
-            recorder,
-            "--media-category",
-            "Capture",
-            "--rate",
-            "16000",
-            "--channels",
-            "1",
-            "--format",
-            "s16",
-            "-",
-        ]
-        try:
-            self.meter_process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-            )
-        except OSError:
-            self.meter_process = None
-            return
-
-        self.meter_thread = threading.Thread(target=self.read_audio_meter, daemon=True)
-        self.meter_thread.start()
-
-    def read_audio_meter(self) -> None:
-        process = self.meter_process
-        if process is None or process.stdout is None:
-            return
-
-        while True:
-            chunk = process.stdout.read(2048)
-            if not chunk:
-                break
-            sample_count = len(chunk) // 2
-            if sample_count == 0:
-                continue
-            samples = struct.unpack(f"<{sample_count}h", chunk[: sample_count * 2])
-            rms = math.sqrt(sum(sample * sample for sample in samples) / sample_count)
-            self.audio_level = min(1.0, rms / 1700.0)
-            self.last_audio_at = time.monotonic()
-
     def animate_meter(self) -> bool:
         self.meter_phase += 1
         if time.monotonic() - self.last_audio_at > 0.4:
@@ -841,34 +799,14 @@ class DictationListener(Gtk.Window):
             context.fill()
         return False
 
-    def stop_audio_meter(self) -> None:
-        process = self.meter_process
-        thread = self.meter_thread
-        self.meter_process = None
-        self.meter_thread = None
-        if process is None:
-            return
-
-        # The meter is only a visual cue; never leave its capture helper alive after hide/destroy.
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=0.5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=0.5)
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=0.2)
-
     def on_hide(self, _widget: Gtk.Widget) -> None:
         self.device_toast_revealer.set_reveal_child(False)
-        self.stop_audio_meter()
+        self.audio_level = 0.0
 
     def on_destroy(self, _widget: Gtk.Widget) -> None:
         if self.copy_feedback_source_id is not None:
             GLib.source_remove(self.copy_feedback_source_id)
             self.copy_feedback_source_id = None
-        self.stop_audio_meter()
 
     def on_delete(self, _widget: Gtk.Window, _event: Gdk.Event) -> bool:
         # Closing the listener should not quit its tray controller or discard an active recording.
@@ -879,7 +817,7 @@ class DictationListener(Gtk.Window):
         if event.keyval != Gdk.KEY_Escape:
             return False
         if self.recording:
-            self.stop_recording(self.stop_button)
+            self.stop_recording(self.record_button)
         else:
             self.hide()
         return True
