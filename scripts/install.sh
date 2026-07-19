@@ -58,6 +58,19 @@ if systemctl --user is-active --quiet graphical-session.target; then
     systemctl --user start epsilon-flow-tray.service
 fi
 
+# systemd accepts a start request before Uvicorn has bound localhost. Wait for
+# the actual service contract so the first dictation cannot race startup.
+for _attempt in $(seq 1 20); do
+    if curl --fail --silent --show-error --max-time 1 http://127.0.0.1:8791/health >/dev/null; then
+        break
+    fi
+    sleep 1
+done
+if ! curl --fail --silent --show-error --max-time 1 http://127.0.0.1:8791/health >/dev/null; then
+    printf 'The backend service did not become healthy. Inspect with: scripts/service.sh native-logs\n' >&2
+    exit 1
+fi
+
 printf 'Installed Epsilon Flow in %s\n' "$INSTALL_DIR"
 printf 'The native backend and desktop tray services are installed.\n'
 printf 'Use scripts/service.sh native-status to inspect both services.\n'
