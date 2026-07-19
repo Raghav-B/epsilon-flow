@@ -1,6 +1,7 @@
 """GTK3 tray, reusable listener, and transcript snippets surface."""
 from __future__ import annotations
 
+import shutil
 import signal
 import socket
 import threading
@@ -42,8 +43,14 @@ def main() -> int:
         if not controller.acquire():
             controller.signal_active_recording(signal.SIGUSR1)
             return
+        controller.install_signal_handlers()
         active["controller"] = controller
         listener.present_for_start()
+
+        def finish() -> bool:
+            controller.restore_signal_handlers()
+            active["controller"] = None
+            return False
 
         def worker() -> None:
             try:
@@ -60,14 +67,29 @@ def main() -> int:
                 GLib.idle_add(listener.hide)
             finally:
                 controller.release()
-                active["controller"] = None
+                GLib.idle_add(finish)
 
         threading.Thread(target=worker, daemon=True).start()
         GLib.timeout_add(100, lambda: _sync_recording(listener, controller))
 
+    def trigger() -> None:
+        controller = active["controller"]
+        if controller is None:
+            start()
+            return
+        if controller.phase != "recording" or controller.stop_requested or controller.cancel_requested:
+            listener.present()
+            return
+        controller.stop_requested = True
+        listener.set_finishing("Finishing recording…")
+        listener.hide()
+
     def notify(title: str, body: str) -> None:
+        executable = shutil.which("notify-send")
+        if not executable:
+            return
         from subprocess import DEVNULL, run
-        run(["notify-send", title, body], stdout=DEVNULL, stderr=DEVNULL, check=False)
+        run([executable, title, body], stdout=DEVNULL, stderr=DEVNULL, check=False)
 
     socket_path = state_dir() / "tray.sock"
     socket_path.parent.mkdir(parents=True, exist_ok=True)
@@ -85,7 +107,7 @@ def main() -> int:
             with connection:
                 command = connection.recv(32).decode("utf-8", errors="replace").strip()
             if command == "trigger":
-                GLib.idle_add(start)
+                GLib.idle_add(trigger)
 
     threading.Thread(target=listen_for_commands, daemon=True).start()
 

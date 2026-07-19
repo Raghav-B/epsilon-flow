@@ -51,8 +51,14 @@ class AppSettings:
             raise ValueError("service URL must use localhost")
 
     def prompt(self) -> str:
-        parts = [part.strip() for part in (self.initial_prompt, self.recognition_hints) if part.strip()]
-        return "\n\nRecognition hints: ".join(parts)
+        initial_prompt = self.initial_prompt.strip()
+        recognition_hints = self.recognition_hints.strip()
+        parts = []
+        if initial_prompt:
+            parts.append(initial_prompt)
+        if recognition_hints:
+            parts.append(f"Recognition hints: {recognition_hints}")
+        return "\n\n".join(parts)
 
 
 class SettingsStore:

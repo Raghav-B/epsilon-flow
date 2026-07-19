@@ -22,3 +22,8 @@ def test_settings_reject_remote_service():
 def test_prompt_combines_initial_prompt_and_hints():
     settings = AppSettings(initial_prompt="Use names.", recognition_hints="Epsilon, Floramis")
     assert settings.prompt() == "Use names.\n\nRecognition hints: Epsilon, Floramis"
+
+
+def test_prompt_labels_recognition_hints_when_used_alone():
+    settings = AppSettings(recognition_hints="Epsilon, Floramis")
+    assert settings.prompt() == "Recognition hints: Epsilon, Floramis"

@@ -21,5 +21,13 @@ def resolve_model_config(model: str, device: str, compute_type: str, cuda_availa
     return ModelConfig(model=model, device=actual_device, compute_type=actual_compute)
 
 
+def is_cuda_oom(error: BaseException) -> bool:
+    message = str(error).lower()
+    return "cuda" in message and any(
+        phrase in message
+        for phrase in ("out of memory", "memory allocation", "failed to allocate", "cublas_status_alloc_failed")
+    )
+
+
 def is_loopback_host(host: str) -> bool:
     return host in {"127.0.0.1", "localhost", "::1"}

@@ -5,9 +5,9 @@ build-backend = "hatchling.build"
 [project]
 name = "epsilon-flow"
 version = "0.1.0"
-description = "Private, local-first Linux dictation with faster-whisper"
+description = "Public, local-first Linux dictation with faster-whisper"
 readme = "README.md"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [{name = "Epsilon", email = "epsilon@floramis.com"}]
 dependencies = ["platformdirs>=4.2", "requests>=2.32"]
@@ -32,3 +32,7 @@ packages = ["src/epsilon_flow"]
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+
+[tool.uv]
+# uv owns only the backend environment; distro Python owns the GTK desktop.
+environments = ["python_version == '3.12'"]
