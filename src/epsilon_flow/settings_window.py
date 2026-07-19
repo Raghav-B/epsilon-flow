@@ -327,7 +327,7 @@ def create_settings_window(store: SettingsStore):
             "recognition_hints",
             "Recognition hints",
             "Add likely names and specialist terms, separated by commas. Hints bias spelling; they are not a guaranteed dictionary.",
-            "Example: Epsilon, OpenClaw, Floramis, faster-whisper",
+            "Example: Epsilon, OpenClaw, CTranslate2, faster-whisper",
         ),
     ):
         view = Gtk.TextView()
@@ -340,6 +340,7 @@ def create_settings_window(store: SettingsStore):
         view.set_tooltip_text(placeholder)
         field_scroller = Gtk.ScrolledWindow()
         field_scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        field_scroller.set_shadow_type(Gtk.ShadowType.IN)
         field_scroller.set_min_content_height(90)
         field_scroller.add(view)
         attach(title, description + " " + placeholder, field_scroller)

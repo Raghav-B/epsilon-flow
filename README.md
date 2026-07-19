@@ -4,6 +4,33 @@ Raghav's local dictation tool, originally built for working with his Epsilon age
 
 Epsilon Flow is a public, local-first Linux dictation app. A GTK3 tray owns a reusable recording listener and local transcript snippets; a loopback FastAPI service runs faster-whisper. It needs no account or cloud API.
 
+## Features
+
+- Press-to-capture GNOME hotkey; press it again to stop and transcribe.
+- Restartable systemd user services for the tray and loopback backend.
+- Faster-Whisper `turbo` transcription on CPU/INT8 or NVIDIA CUDA/Float16.
+- Automatic CUDA-to-CPU fallback when **Device** is set to Automatic.
+- Native two-environment install or Docker Compose CPU/CUDA profiles.
+- Selectable microphone, language, compute type, device, and delivery mode.
+- Configurable Initial Prompt and Recognition Hints for context and specialist names.
+- Clipboard copy, paste, virtual typing, or transcript-only delivery.
+- Bounded local transcript snippets with explicit play-to-record; opening history never starts the microphone.
+- Ubuntu 22.04, 24.04, and 26.04 GNOME/Wayland support.
+
+## Screenshots
+
+### Recording
+
+![Epsilon Flow active recording surface](docs/images/recording.png)
+
+### Transcript snippets
+
+![Epsilon Flow idle transcript snippets with play-to-record](docs/images/snippets.png)
+
+### Settings
+
+![Epsilon Flow settings with shortcut capture and guided fields](docs/images/settings.png)
+
 ## Ubuntu 22.04, 24.04, and 26.04
 
 Install the desktop/runtime packages (package names are shared by these Ubuntu releases):
