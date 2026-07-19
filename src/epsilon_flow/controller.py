@@ -6,14 +6,21 @@ import json
 import os
 import signal
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
-from typing import Callable, TextIO
+from typing import Callable, Literal, TextIO
 
 from .settings import state_dir
 
 
 ACTIVE_PHASES = {"starting", "recording", "transcribing", "delivering"}
+
+
+@dataclass(frozen=True)
+class DictationViewState:
+    mode: Literal["idle", "recording", "busy"]
+    title: str
 
 
 class DictationController:
@@ -74,6 +81,21 @@ class DictationController:
         for signal_number, previous_handler in self.previous_signal_handlers.items():
             signal.signal(signal_number, previous_handler)
         self.previous_signal_handlers.clear()
+
+    def view_state(self) -> DictationViewState:
+        """Map controller phase into the one listener state users should see."""
+        if self.handle is None or self.phase is None:
+            return DictationViewState("idle", "Press to start")
+        if self.phase in {"starting", "recording"}:
+            if self.cancel_requested:
+                return DictationViewState("busy", "Discarding recording…")
+            if self.stop_requested:
+                return DictationViewState("busy", "Finishing recording…")
+            title = "Starting microphone…" if self.phase == "starting" else "Recording"
+            return DictationViewState("recording", title)
+        if self.phase == "transcribing":
+            return DictationViewState("busy", "Transcribing…")
+        return DictationViewState("busy", "Delivering transcript…")
 
     def signal_active_recording(self, signal_number: int = signal.SIGUSR1) -> bool:
         try:

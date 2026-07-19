@@ -38,6 +38,7 @@ def main() -> int:
 
     def start(_item=None) -> None:
         if active["controller"] is not None:
+            _sync_listener_state(listener, active["controller"])
             listener.present()
             return
         controller = DictationController()
@@ -50,7 +51,9 @@ def main() -> int:
 
         def finish() -> bool:
             controller.restore_signal_handlers()
-            active["controller"] = None
+            if active["controller"] is controller:
+                active["controller"] = None
+            listener.set_idle()
             return False
 
         def report_audio_level(level: float) -> None:
@@ -74,7 +77,7 @@ def main() -> int:
                 GLib.idle_add(finish)
 
         threading.Thread(target=worker, daemon=True).start()
-        GLib.timeout_add(100, lambda: _sync_recording(listener, controller))
+        GLib.timeout_add(100, lambda: _sync_listener_state(listener, controller))
 
     def trigger() -> None:
         controller = active["controller"]
@@ -82,11 +85,18 @@ def main() -> int:
             start()
             return
         if controller.phase != "recording" or controller.stop_requested or controller.cancel_requested:
+            _sync_listener_state(listener, controller)
             listener.present()
             return
         controller.stop_requested = True
         listener.set_finishing("Finishing recording…")
         listener.hide()
+
+    def open_snippets(_item=None) -> None:
+        controller = active["controller"]
+        if controller is not None:
+            _sync_listener_state(listener, controller)
+        listener.present_snippets()
 
     def open_settings(_item=None) -> None:
         window = settings_surface["window"]
@@ -130,7 +140,7 @@ def main() -> int:
     menu = Gtk.Menu()
     for label, callback in (
         ("Start Dictation", start),
-        ("Open Transcript Snippets", lambda _item: listener.present_snippets()),
+        ("Open Transcript Snippets", open_snippets),
         ("Settings…", open_settings),
         ("Quit", lambda _item: Gtk.main_quit()),
     ):
@@ -147,10 +157,15 @@ def main() -> int:
     return 0
 
 
-def _sync_recording(listener, controller: DictationController) -> bool:
-    if controller.handle is None:
+def _sync_listener_state(listener, controller: DictationController) -> bool:
+    state = controller.view_state()
+    if state.mode == "idle":
+        listener.set_idle(state.title)
         return False
-    listener.set_recording(True, "Recording")
+    if state.mode == "recording":
+        listener.set_recording(True, state.title)
+    else:
+        listener.set_busy(state.title)
     return True
 
 

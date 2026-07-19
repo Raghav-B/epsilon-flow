@@ -168,6 +168,11 @@ window#listener_window {
   background: #ff3f6e;
 }
 
+#stop_button:disabled {
+  background: #3a3035;
+  color: #8f9098;
+}
+
 #action_button:active, #action_button:focus, #action_button:checked,
 #danger_button:active, #danger_button:focus, #danger_button:checked,
 #stop_button:active, #stop_button:focus, #stop_button:checked {
@@ -207,6 +212,8 @@ class DictationListener(Gtk.Window):
         self.on_cancel = on_cancel
         self.history = history or TranscriptHistory()
         self.recording = False
+        self.busy = False
+        self.busy_icon = "process-working-symbolic"
         self.recording_started = 0.0
         self.limit_warning_visible = False
         self.audio_level = 0.0
@@ -444,7 +451,7 @@ class DictationListener(Gtk.Window):
 
     def present_snippets(self) -> None:
         self.refresh_snippets()
-        if not self.recording:
+        if not self.recording and not self.busy:
             self.set_idle("Press to start")
         self.show_all()
         self.drawer_revealer.set_reveal_child(True)
@@ -534,6 +541,7 @@ class DictationListener(Gtk.Window):
 
     def set_recording(self, recording: bool, title: str) -> None:
         self.recording = recording
+        self.busy = False
         self.title_label.set_text(title)
         self.recording_dot.set_name("recording_dot" if recording else "idle_dot")
         if not recording:
@@ -546,6 +554,23 @@ class DictationListener(Gtk.Window):
         self.elapsed.set_text("00:00 / 1:00:00")
         self.set_recording(False, title)
 
+    def set_busy(self, title: str, icon: str | None = None) -> None:
+        # Busy phases own no microphone controls. Keep the listener available
+        # for transcript inspection, but freeze the timer and make × close-only.
+        self.recording = False
+        self.busy = True
+        self.busy_icon = icon or self.first_available_icon(
+            "content-loading-symbolic",
+            "process-working-symbolic",
+            "media-playback-stop-symbolic",
+        )
+        self.recording_started = 0.0
+        self.audio_level = 0.0
+        self.title_label.set_text(title)
+        self.recording_dot.set_name("idle_dot")
+        self.apply_mode_controls()
+        self.refresh_device_toast()
+
     def apply_mode_controls(self) -> None:
         # Idle transcript mode keeps the same geometry as active dictation:
         # a parked timer, static meter, play action, and close control. This
@@ -557,12 +582,24 @@ class DictationListener(Gtk.Window):
         self.record_button.set_visible(True)
         self.cancel_button.set_visible(True)
         if self.recording:
+            self.meter.set_opacity(1.0)
+            self.record_button.set_sensitive(True)
             self.set_button_icon(self.record_button, "media-playback-stop-symbolic")
             self.record_button.set_tooltip_text("Stop recording and transcribe the captured audio")
             self.record_button.get_accessible().set_name("Stop and transcribe")
             self.cancel_button.set_tooltip_text("Discard this recording without transcription or delivery")
             self.cancel_button.get_accessible().set_name("Cancel recording")
+        elif self.busy:
+            self.meter.set_opacity(0.28)
+            self.record_button.set_sensitive(False)
+            self.set_button_icon(self.record_button, self.busy_icon)
+            self.record_button.set_tooltip_text(self.title_label.get_text())
+            self.record_button.get_accessible().set_name(self.title_label.get_text())
+            self.cancel_button.set_tooltip_text("Close the dictation window; processing continues in the background")
+            self.cancel_button.get_accessible().set_name("Close")
         else:
+            self.meter.set_opacity(0.48)
+            self.record_button.set_sensitive(True)
             self.set_button_icon(self.record_button, "media-playback-start-symbolic")
             self.record_button.set_tooltip_text("Start recording a new dictation")
             self.record_button.get_accessible().set_name("Start dictation")
@@ -628,7 +665,7 @@ class DictationListener(Gtk.Window):
         return f"{minutes:02d}:{seconds:02d}"
 
     def set_finishing(self, subtitle: str) -> None:
-        self.set_recording(False, subtitle)
+        self.set_busy(subtitle, icon="media-playback-stop-symbolic")
 
     def stop_recording(self, _button: Gtk.Button) -> None:
         if not self.recording:
