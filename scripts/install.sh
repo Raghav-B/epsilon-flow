@@ -11,6 +11,9 @@ if [[ ! -x "$SYSTEM_PYTHON" ]]; then
     printf 'The distro Python is required at %s. Install python3 and python3-venv.\n' "$SYSTEM_PYTHON" >&2
     exit 1
 fi
+if ! command -v uv >/dev/null 2>&1 && [[ -x "$HOME/.local/bin/uv" ]]; then
+    export PATH="$HOME/.local/bin:$PATH"
+fi
 if ! command -v uv >/dev/null 2>&1; then
     printf 'uv is required: https://docs.astral.sh/uv/getting-started/installation/\n' >&2
     exit 1
@@ -21,6 +24,11 @@ if ! command -v systemctl >/dev/null 2>&1; then
 fi
 
 mkdir -p "$INSTALL_DIR"
+
+# Reinstalls replace both environments in place. Stop managed and legacy tray
+# processes first so the new service cannot race an old Unix command socket.
+systemctl --user stop epsilon-flow-tray.service epsilon-flow-backend.service >/dev/null 2>&1 || true
+pkill -u "$(id -u)" -f "$DESKTOP_VENV/bin/python .*epsilon-flow-tray" >/dev/null 2>&1 || true
 
 # GTK, PyGObject, and AppIndicator are ABI-coupled distro packages. The desktop
 # environment must therefore inherit /usr/lib/python3/dist-packages.
@@ -41,7 +49,15 @@ done
 ln -sfn "$BACKEND_VENV/bin/epsilon-flow-backend" "$HOME/.local/bin/epsilon-flow-backend"
 
 EPSILON_FLOW_BACKEND_EXEC="$BACKEND_VENV/bin/epsilon-flow-backend" \
+EPSILON_FLOW_TRAY_EXEC="$DESKTOP_VENV/bin/epsilon-flow-tray" \
     "$ROOT/scripts/service.sh" native-install
+"$DESKTOP_VENV/bin/epsilon-flow" apply-integrations --no-hotkey
+# Start the tray for this session even when login autostart is disabled. A
+# headless install leaves it ready for the next graphical login instead.
+if systemctl --user is-active --quiet graphical-session.target; then
+    systemctl --user start epsilon-flow-tray.service
+fi
 
 printf 'Installed Epsilon Flow in %s\n' "$INSTALL_DIR"
-printf 'The native backend is enabled and running. Start the tray with: epsilon-flow-tray\n'
+printf 'The native backend and desktop tray services are installed.\n'
+printf 'Use scripts/service.sh native-status to inspect both services.\n'

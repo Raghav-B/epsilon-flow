@@ -15,8 +15,16 @@ def create_settings_window(store: SettingsStore):
 
     current = store.load()
     window = Gtk.Window(title="Epsilon Flow Settings")
+    window.set_name("settings_window")
     window.set_default_size(620, 680)
     window.set_border_width(16)
+
+    # The recording listener uses a transparent top-level window. Keep this
+    # ordinary settings surface opaque when both share the tray process.
+    provider = Gtk.CssProvider()
+    provider.load_from_data(b"window#settings_window { background-color: @theme_bg_color; }")
+    window.get_style_context().add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1)
+
     root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
     window.add(root)
 
@@ -27,7 +35,6 @@ def create_settings_window(store: SettingsStore):
     text_rows = [
         ("hotkey", "Custom hotkey"),
         ("microphone", "Microphone"),
-        ("model", "Model name or path"),
         ("compute_type", "Compute type"),
         ("language", "Language"),
         ("service_url", "Local service URL"),
@@ -58,6 +65,10 @@ def create_settings_window(store: SettingsStore):
     for name, label_text in (("start_at_login", "Start at login"), ("history_enabled", "Save transcript history")):
         switch = Gtk.Switch()
         switch.set_active(getattr(current, name))
+        # GTK switches distort when Grid allocates the full input-column width.
+        # Keep the native control compact instead of styling theme internals.
+        switch.set_halign(Gtk.Align.START)
+        switch.set_hexpand(False)
         grid.attach(Gtk.Label(label=label_text, xalign=0), 0, row, 1, 1)
         grid.attach(switch, 1, row, 1, 1)
         widgets[name] = switch
@@ -95,14 +106,16 @@ def create_settings_window(store: SettingsStore):
     def save_settings(_button) -> None:
         values = asdict(current)
         for name, widget in widgets.items():
-            if isinstance(widget, Gtk.Entry):
+            # Gtk.SpinButton subclasses Gtk.Entry, so read its numeric value
+            # before the generic text-entry branch.
+            if isinstance(widget, Gtk.SpinButton):
+                values[name] = widget.get_value_as_int()
+            elif isinstance(widget, Gtk.Entry):
                 values[name] = widget.get_text().strip()
             elif isinstance(widget, Gtk.ComboBoxText):
                 values[name] = widget.get_active_text()
             elif isinstance(widget, Gtk.Switch):
                 values[name] = widget.get_active()
-            elif isinstance(widget, Gtk.SpinButton):
-                values[name] = widget.get_value_as_int()
             elif isinstance(widget, Gtk.TextView):
                 buffer = widget.get_buffer()
                 values[name] = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True).strip()

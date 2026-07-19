@@ -1,4 +1,4 @@
-"""Optional GNOME hotkey and XDG autostart integration."""
+"""Optional GNOME hotkey and tray-service integration."""
 from __future__ import annotations
 
 import shutil
@@ -10,11 +10,27 @@ from platformdirs import user_config_path
 
 HOTKEY_PATH = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/epsilon-flow/"
 SCHEMA = "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding"
+TRAY_UNIT_NAME = "epsilon-flow-tray.service"
 
 
 def set_autostart(enabled: bool) -> Path:
-    directory = Path(user_config_path("autostart", appauthor=False))
-    path = directory / "epsilon-flow.desktop"
+    autostart_directory = Path(user_config_path("autostart", appauthor=False))
+    autostart_path = autostart_directory / "epsilon-flow.desktop"
+    unit_path = Path(user_config_path("systemd", appauthor=False)) / "user" / TRAY_UNIT_NAME
+    if shutil.which("systemctl") and unit_path.exists():
+        # Upgrades from the XDG-only release must not launch a second tray.
+        autostart_path.unlink(missing_ok=True)
+        action = "enable" if enabled else "disable"
+        command = ["systemctl", "--user", action]
+        if enabled:
+            command.append("--now")
+        command.append(TRAY_UNIT_NAME)
+        subprocess.run(command, check=True)
+        return unit_path
+
+    # Source-tree and non-systemd installs retain the portable XDG fallback.
+    directory = autostart_directory
+    path = autostart_path
     if not enabled:
         path.unlink(missing_ok=True)
         return path

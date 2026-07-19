@@ -14,6 +14,13 @@ def test_settings_round_trip_and_private_permissions(tmp_path):
     assert store.path.stat().st_mode & 0o777 == 0o600
 
 
+def test_desktop_defaults_to_login_tray_and_fixed_public_model():
+    settings = AppSettings()
+
+    assert settings.start_at_login is True
+    assert settings.model == "Systran/faster-whisper-large-v3-turbo"
+
+
 def test_settings_reject_remote_service():
     with pytest.raises(ValueError, match="localhost"):
         AppSettings(service_url="http://203.0.113.2:8791").validate()

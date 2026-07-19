@@ -32,7 +32,7 @@ LISTENER_BOTTOM_MARGIN = 120
 
 
 CSS = """
-window {
+window#listener_window {
   background: transparent;
 }
 
@@ -197,6 +197,7 @@ class DictationListener(Gtk.Window):
         history: TranscriptHistory | None = None,
     ) -> None:
         super().__init__(title="Epsilon Flow")
+        self.set_name("listener_window")
         self.on_stop = on_stop
         self.on_cancel = on_cancel
         self.history = history or TranscriptHistory()

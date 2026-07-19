@@ -33,7 +33,6 @@ def trigger() -> int:
 def doctor() -> int:
     settings = SettingsStore().load()
     checks = {
-        "python_3_12": sys.version_info[:2] == (3, 12),
         "ffmpeg": bool(shutil.which("ffmpeg")),
         "clipboard": any(shutil.which(name) for name in ("wl-copy", "xclip", "xsel")),
         "virtual_keyboard": any(shutil.which(name) for name in ("ydotool", "wtype", "xdotool")),
@@ -45,7 +44,7 @@ def doctor() -> int:
         pass
     for name, healthy in checks.items():
         print(f"{'OK' if healthy else 'MISSING'}  {name}")
-    return 0 if all(checks[name] for name in ("python_3_12", "ffmpeg", "clipboard", "service")) else 1
+    return 0 if all(checks[name] for name in ("ffmpeg", "clipboard", "service")) else 1
 
 
 def main() -> int:

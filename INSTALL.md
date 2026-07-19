@@ -12,8 +12,8 @@ sudo apt install libnotify-bin ydotool xdotool
 
 After installing [uv](https://docs.astral.sh/uv/getting-started/installation/), run `./scripts/install.sh`. The desktop environment deliberately uses distro `/usr/bin/python3` with `--system-site-packages` so GTK/PyGObject/AppIndicator share Ubuntu's native ABI. The separate faster-whisper backend uses uv-managed Python 3.12 for consistent backend dependencies on all three Ubuntu versions.
 
-The installer creates and starts a systemd user service. Use `scripts/service.sh native-{install,start,stop,status,logs}` to manage it. Run `epsilon-flow doctor` after installation.
+The installer creates systemd user services for the backend and graphical tray. Use `scripts/service.sh native-{install,start,stop,status,logs}` for the backend and `scripts/service.sh tray-{start,stop,status,logs}` for the tray. The tray starts at graphical login by default; Settings can disable future login startup without killing the current session. Run `epsilon-flow doctor` after installation.
 
 For isolation, stop the native service and use `scripts/service.sh start cpu` or `scripts/service.sh start cuda`. CUDA requires a working NVIDIA driver and NVIDIA Container Toolkit. Verify with both `nvidia-smi` and `docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi`. With Secure Boot enabled, enroll/sign the NVIDIA module through the distribution's MOK flow if host GPU detection fails.
 
-Models are acquired by faster-whisper from the configured Hugging Face ID and cached automatically. Native and Docker backends bind only `127.0.0.1:8791`.
+The fixed public model is `Systran/faster-whisper-large-v3-turbo`; faster-whisper downloads and caches it automatically on first use. Native and Docker backends bind only `127.0.0.1:8791`.

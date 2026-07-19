@@ -20,7 +20,6 @@ Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then inst
 
 ```bash
 ./scripts/install.sh
-epsilon-flow-tray
 ```
 
 The installer creates two native environments on purpose:
@@ -28,18 +27,20 @@ The installer creates two native environments on purpose:
 - `.venv-desktop` uses `/usr/bin/python3 --system-site-packages`, because PyGObject and AppIndicator are distro packages tied to Ubuntu's GTK libraries.
 - `.venv-backend` uses uv-managed Python 3.12, giving faster-whisper one consistent runtime across Ubuntu 22.04, 24.04, and 26.04.
 
-The installer enables and starts `epsilon-flow-backend.service` as a systemd user service, so tray login autostart is paired with a backend. Manage it with:
+The installer creates systemd user services for both the loopback backend and the desktop tray. The backend is always enabled; the tray is enabled at graphical login by default and restarts if it crashes. **Start at login** in Settings controls future login startup without killing the current tray session. Manage them with:
 
 ```bash
 ./scripts/service.sh native-start
 ./scripts/service.sh native-stop
 ./scripts/service.sh native-status
 ./scripts/service.sh native-logs
+./scripts/service.sh tray-status
+./scripts/service.sh tray-logs
 ```
 
-Open **Settings…** from the tray to configure the hotkey, login autostart, delivery, history, microphone, model/device/compute type/language, Initial Prompt, and Recognition Hints. On GNOME, run `epsilon-flow apply-integrations` after saving integration changes. Pressing the hotkey again stops and finalizes an active recording.
+Open **Settings…** from the tray to configure the hotkey, login autostart, delivery, history, microphone, device/compute type/language, Initial Prompt, and Recognition Hints. **Save** applies integrations and closes Settings. Pressing the hotkey again stops and finalizes an active recording.
 
-Models use a Hugging Face model ID or a compatible local CTranslate2 directory. Model IDs download into the normal faster-whisper cache on first use.
+Epsilon Flow currently uses `Systran/faster-whisper-large-v3-turbo` as its fixed public model. It downloads into the normal faster-whisper cache on first use. Advanced deployments can still override `EPSILON_FLOW_MODEL` for Docker or edit the private settings file, but model choice is intentionally hidden from the everyday UI.
 
 ## Docker CPU or CUDA backend
 
@@ -72,7 +73,8 @@ Both profiles publish only loopback. The named volume preserves downloaded model
 - `epsilon-flow doctor` — inspect desktop and service dependencies
 - `epsilon-flow show-settings` — print effective settings
 - `epsilon-flow-backend` — run the native loopback service directly
-- `./scripts/service.sh native-install` — recreate and enable the user service
-- `./scripts/uninstall.sh` — remove both environments, launchers, autostart, and the user service while preserving settings/history
+- `./scripts/service.sh native-install` — recreate the backend and tray user services
+- `./scripts/service.sh tray-{start,stop,status,logs}` — manage the background tray
+- `./scripts/uninstall.sh` — remove both environments, launchers, autostart, and user services while preserving settings/history
 
 State follows XDG directories (`~/.config/epsilon-flow` and `~/.local/state/epsilon-flow`) with owner-only permissions. Uploads are bounded to 100 MiB by default; set `EPSILON_FLOW_MAX_UPLOAD_BYTES` on the backend to choose another limit.

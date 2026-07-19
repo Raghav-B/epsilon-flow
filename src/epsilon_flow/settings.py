@@ -19,7 +19,7 @@ DEVICES = {"auto", "cpu", "cuda"}
 @dataclass
 class AppSettings:
     hotkey: str = "<Ctrl><Shift>F9"
-    start_at_login: bool = False
+    start_at_login: bool = True
     delivery_mode: str = "copy"
     history_enabled: bool = True
     history_limit: int = 30
