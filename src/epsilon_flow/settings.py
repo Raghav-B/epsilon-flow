@@ -24,7 +24,7 @@ class AppSettings:
     history_enabled: bool = True
     history_limit: int = 30
     microphone: str = "default"
-    model: str = "Systran/faster-whisper-large-v3-turbo"
+    model: str = "deepdml/faster-whisper-large-v3-turbo-ct2"
     device: str = "auto"
     compute_type: str = "default"
     language: str = "auto"

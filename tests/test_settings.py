@@ -18,7 +18,7 @@ def test_desktop_defaults_to_login_tray_and_fixed_public_model():
     settings = AppSettings()
 
     assert settings.start_at_login is True
-    assert settings.model == "Systran/faster-whisper-large-v3-turbo"
+    assert settings.model == "deepdml/faster-whisper-large-v3-turbo-ct2"
 
 
 def test_settings_reject_remote_service():

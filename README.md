@@ -40,7 +40,7 @@ The installer creates systemd user services for both the loopback backend and th
 
 Open **Settings…** from the tray to configure the hotkey, login autostart, delivery, history, microphone, device/compute type/language, Initial Prompt, and Recognition Hints. **Save** applies integrations and closes Settings. Pressing the hotkey again stops and finalizes an active recording.
 
-Epsilon Flow currently uses `Systran/faster-whisper-large-v3-turbo` as its fixed public model. It downloads into the normal faster-whisper cache on first use. Advanced deployments can still override `EPSILON_FLOW_MODEL` for Docker or edit the private settings file, but model choice is intentionally hidden from the everyday UI.
+Epsilon Flow currently uses `deepdml/faster-whisper-large-v3-turbo-ct2` as its fixed public model. It downloads into the normal faster-whisper cache on first use. Advanced deployments can still override `EPSILON_FLOW_MODEL` for Docker or edit the private settings file, but model choice is intentionally hidden from the everyday UI.
 
 ## Docker CPU or CUDA backend
 

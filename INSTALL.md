@@ -16,4 +16,4 @@ The installer creates systemd user services for the backend and graphical tray. 
 
 For isolation, stop the native service and use `scripts/service.sh start cpu` or `scripts/service.sh start cuda`. CUDA requires a working NVIDIA driver and NVIDIA Container Toolkit. Verify with both `nvidia-smi` and `docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi`. With Secure Boot enabled, enroll/sign the NVIDIA module through the distribution's MOK flow if host GPU detection fails.
 
-The fixed public model is `Systran/faster-whisper-large-v3-turbo`; faster-whisper downloads and caches it automatically on first use. Native and Docker backends bind only `127.0.0.1:8791`.
+The fixed public model is `deepdml/faster-whisper-large-v3-turbo-ct2`; faster-whisper downloads and caches it automatically on first use. Native and Docker backends bind only `127.0.0.1:8791`.
