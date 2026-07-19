@@ -22,6 +22,10 @@ if ! command -v systemctl >/dev/null 2>&1; then
     printf 'systemctl is required for the native user backend service.\n' >&2
     exit 1
 fi
+if ! command -v curl >/dev/null 2>&1; then
+    printf 'curl is required for backend readiness checks.\n' >&2
+    exit 1
+fi
 
 mkdir -p "$INSTALL_DIR"
 

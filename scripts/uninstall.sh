@@ -10,6 +10,8 @@ if command -v systemctl >/dev/null 2>&1; then
     systemctl --user disable --now "$BACKEND_UNIT_NAME" "$TRAY_UNIT_NAME" >/dev/null 2>&1 || true
 fi
 rm -f "$UNIT_DIR/$BACKEND_UNIT_NAME" "$UNIT_DIR/$TRAY_UNIT_NAME"
+rm -f "$UNIT_DIR/$BACKEND_UNIT_NAME.d/cuda-libraries.conf"
+rmdir "$UNIT_DIR/$BACKEND_UNIT_NAME.d" >/dev/null 2>&1 || true
 if command -v systemctl >/dev/null 2>&1; then
     systemctl --user daemon-reload >/dev/null 2>&1 || true
 fi

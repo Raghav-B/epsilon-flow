@@ -38,7 +38,7 @@ Install the desktop/runtime packages (package names are shared by these Ubuntu r
 ```bash
 sudo apt update
 sudo apt install python3 python3-venv python3-pip python3-gi gir1.2-gtk-3.0 \
-  gir1.2-ayatanaappindicator3-0.1 ffmpeg wl-clipboard
+  gir1.2-ayatanaappindicator3-0.1 curl ffmpeg wl-clipboard
 # Optional notifications and automatic keyboard insertion:
 sudo apt install libnotify-bin ydotool xdotool
 ```
@@ -68,6 +68,21 @@ The installer creates systemd user services for both the loopback backend and th
 Open **Settings…** from the tray to configure the hotkey, login autostart, delivery, history, microphone, device/compute type/language, Initial Prompt, and Recognition Hints. **Save** applies integrations and closes Settings. Pressing the hotkey again stops and finalizes an active recording.
 
 Epsilon Flow currently uses Faster-Whisper's supported `turbo` alias for Whisper large-v3-turbo. It downloads into the normal faster-whisper cache on first use. Advanced Docker deployments can still override `EPSILON_FLOW_MODEL`, but model choice is intentionally fixed in the everyday desktop UI.
+
+### Native CPU
+
+The normal installer is complete for CPU use. Leave **Device** on Automatic or choose CPU; the backend selects INT8 automatically.
+
+### Native CUDA
+
+Current Faster-Whisper/CTranslate2 releases require an NVIDIA driver compatible with CUDA 12, plus cuBLAS for CUDA 12 and cuDNN 9. After the normal install, verify the driver and run the helper:
+
+```bash
+nvidia-smi
+./scripts/install-native-cuda.sh
+```
+
+The helper installs cuBLAS/cuDNN only inside Epsilon Flow's backend environment, adds their library path to the backend's systemd user service, and performs a strict CUDA/Float16 model-load check. It does not silently fall back to CPU. If `nvidia-smi` fails with Secure Boot enabled, complete your distribution's NVIDIA MOK enrollment/signing flow first.
 
 ## Docker CPU or CUDA backend
 
@@ -101,6 +116,7 @@ Both profiles publish only loopback. The named volume preserves downloaded model
 - `epsilon-flow show-settings` — print effective settings
 - `epsilon-flow-backend` — run the native loopback service directly
 - `./scripts/service.sh native-install` — recreate the backend and tray user services
+- `./scripts/install-native-cuda.sh` — add and verify native CUDA 12/cuDNN 9 support
 - `./scripts/service.sh tray-{start,stop,status,logs}` — manage the background tray
 - `./scripts/uninstall.sh` — remove both environments, launchers, autostart, and user services while preserving settings/history
 
