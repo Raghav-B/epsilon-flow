@@ -1,4 +1,5 @@
 import io
+import struct
 import subprocess
 from types import SimpleNamespace
 
@@ -8,38 +9,34 @@ from epsilon_flow import dictation
 from epsilon_flow.settings import AppSettings
 
 
-def test_audio_level_from_ffmpeg_metadata():
-    assert dictation.audio_level_from_metadata("unrelated=value") is None
-    assert dictation.audio_level_from_metadata(
-        "lavfi.astats.Overall.RMS_level=-inf"
-    ) == 0.0
-    assert dictation.audio_level_from_metadata(
-        "lavfi.astats.Overall.RMS_level=-36"
-    ) == pytest.approx(0.5)
-    assert dictation.audio_level_from_metadata(
-        "lavfi.astats.Overall.RMS_level=-6"
-    ) == 1.0
+def pcm_at_decibels(decibels: float, sample_count: int = 64) -> bytes:
+    amplitude = round(dictation.PCM_FULL_SCALE * (10 ** (decibels / 20)))
+    samples = [amplitude if index % 2 else -amplitude for index in range(sample_count)]
+    return struct.pack(f"<{sample_count}h", *samples)
 
 
-def test_read_audio_levels_ignores_other_metadata():
+def test_audio_level_from_pcm():
+    assert dictation.audio_level_from_pcm(b"") is None
+    assert dictation.audio_level_from_pcm(struct.pack("<8h", *([0] * 8))) == 0.0
+    assert dictation.audio_level_from_pcm(pcm_at_decibels(-36)) == pytest.approx(0.5, abs=0.01)
+    assert dictation.audio_level_from_pcm(pcm_at_decibels(-6)) == 1.0
+
+
+def test_read_audio_levels_streams_pcm_chunks():
     levels = []
-    stream = io.StringIO(
-        "frame:0 pts:0\n"
-        "lavfi.astats.Overall.RMS_level=-48\n"
-        "lavfi.astats.Overall.Peak_level=-12\n"
-    )
+    stream = io.BytesIO(pcm_at_decibels(-48, sample_count=1024))
 
     dictation.read_audio_levels(stream, levels.append)
 
-    assert levels == [pytest.approx(0.25)]
+    assert levels == [pytest.approx(0.25, abs=0.01)]
 
 
 def test_record_audio_meters_the_same_ffmpeg_input(tmp_path, monkeypatch):
     captured = {}
 
     class FakeRecorder:
-        stdout = io.StringIO("lavfi.astats.Overall.RMS_level=-36\n")
-        stderr = io.StringIO("")
+        stdout = io.BytesIO(pcm_at_decibels(-36))
+        stderr = io.BytesIO(b"")
         returncode = 0
 
         @staticmethod
@@ -69,7 +66,10 @@ def test_record_audio_meters_the_same_ffmpeg_input(tmp_path, monkeypatch):
 
     assert recorded
     assert captured["phase"] == "recording"
-    assert captured["command"][captured["command"].index("-i") + 1] == "alsa_input.usb-headset"
-    assert captured["command"][captured["command"].index("-af") + 1] == dictation.AUDIO_METER_FILTER
+    command = captured["command"]
+    assert command[command.index("-i") + 1] == "alsa_input.usb-headset"
+    assert command.count("-map") == 2
+    assert command[-3:] == ["-f", "s16le", "pipe:1"]
     assert captured["kwargs"]["stdout"] is subprocess.PIPE
-    assert levels == [pytest.approx(0.5), 0.0]
+    assert captured["kwargs"]["bufsize"] == 0
+    assert levels == [pytest.approx(0.5, abs=0.01), 0.0]

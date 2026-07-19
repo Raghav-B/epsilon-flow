@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import math
 import shutil
+import struct
 import subprocess
 import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, TextIO
+from typing import Any, BinaryIO, Callable
 
 import requests
 
@@ -18,31 +19,37 @@ from .history import TranscriptHistory
 from .settings import AppSettings
 
 
-AUDIO_LEVEL_PREFIX = "lavfi.astats.Overall.RMS_level="
-AUDIO_METER_FILTER = (
-    "astats=metadata=1:reset=1,"
-    "ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-"
-)
+PCM_METER_CHUNK_BYTES = 2048
+PCM_FULL_SCALE = 32768.0
 AudioLevelCallback = Callable[[float], None]
 
 
-def audio_level_from_metadata(line: str) -> float | None:
-    """Map FFmpeg RMS metadata from roughly -60..-12 dB into 0..1."""
-    if not line.startswith(AUDIO_LEVEL_PREFIX):
+def audio_level_from_pcm(chunk: bytes) -> float | None:
+    """Map little-endian signed 16-bit PCM from roughly -60..-12 dB into 0..1."""
+    sample_count = len(chunk) // 2
+    if sample_count == 0:
         return None
-    raw_value = line.removeprefix(AUDIO_LEVEL_PREFIX).strip()
-    try:
-        decibels = float(raw_value)
-    except ValueError:
-        return None
-    if not math.isfinite(decibels):
+    samples = struct.unpack(f"<{sample_count}h", chunk[: sample_count * 2])
+    rms = math.sqrt(sum(sample * sample for sample in samples) / sample_count)
+    if rms <= 0:
         return 0.0
+    decibels = 20.0 * math.log10(rms / PCM_FULL_SCALE)
     return max(0.0, min(1.0, (decibels + 60.0) / 48.0))
 
 
-def read_audio_levels(stream: TextIO, callback: AudioLevelCallback) -> None:
-    for line in stream:
-        level = audio_level_from_metadata(line.strip())
+def read_audio_levels(stream: BinaryIO, callback: AudioLevelCallback) -> None:
+    pending = b""
+    while True:
+        chunk = stream.read(PCM_METER_CHUNK_BYTES)
+        if not chunk:
+            break
+        chunk = pending + chunk
+        if len(chunk) % 2:
+            pending = chunk[-1:]
+            chunk = chunk[:-1]
+        else:
+            pending = b""
+        level = audio_level_from_pcm(chunk)
         if level is None:
             continue
         try:
@@ -65,20 +72,21 @@ def record_audio(
     input_device = settings.microphone or "default"
     command = [
         ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "pulse", "-i", input_device,
-        "-t", str(max_seconds), "-ac", "1", "-ar", "16000",
+        "-t", str(max_seconds), "-map", "0:a:0", "-ac", "1", "-ar", "16000", str(path),
     ]
     if on_audio_level is not None:
-        # Derive the visual meter from the exact stream FFmpeg records. This
-        # avoids a second microphone capture process, respects the selected
-        # PulseAudio source, and works without an optional pw-record binary.
-        command.extend(["-af", AUDIO_METER_FILTER])
-    command.append(str(path))
+        # Duplicate the exact selected FFmpeg input into a live raw-PCM pipe.
+        # Metadata output is buffered until capture ends on some FFmpeg builds,
+        # whereas this stream gives the listener a level about every 64 ms.
+        command.extend([
+            "-t", str(max_seconds), "-map", "0:a:0", "-ac", "1", "-ar", "16000",
+            "-f", "s16le", "pipe:1",
+        ])
     recorder = subprocess.Popen(
         command,
         stdout=subprocess.PIPE if on_audio_level is not None else subprocess.DEVNULL,
         stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1,
+        bufsize=0,
     )
     meter_thread = None
     if on_audio_level is not None and recorder.stdout is not None:
@@ -106,7 +114,8 @@ def record_audio(
         except Exception:
             pass
     if recorder.returncode not in (0, 255, -15):
-        error = recorder.stderr.read().strip() if recorder.stderr else ""
+        error_bytes = recorder.stderr.read() if recorder.stderr else b""
+        error = error_bytes.decode("utf-8", errors="replace").strip()
         raise RuntimeError(f"microphone recording failed: {error}")
     return not controller.cancel_requested
 
