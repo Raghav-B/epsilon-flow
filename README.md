@@ -1,5 +1,7 @@
 # Epsilon Flow
 
+Raghav's local dictation tool, originally built for working with his Epsilon agent.
+
 Epsilon Flow is a public, local-first Linux dictation app. A GTK3 tray owns a reusable recording listener and local transcript snippets; a loopback FastAPI service runs faster-whisper. It needs no account or cloud API.
 
 ## Ubuntu 22.04, 24.04, and 26.04

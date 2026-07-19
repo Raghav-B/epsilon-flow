@@ -16,7 +16,7 @@ def test_settings_round_trip_and_private_permissions(tmp_path):
 
 def test_settings_reject_remote_service():
     with pytest.raises(ValueError, match="localhost"):
-        AppSettings(service_url="http://192.168.1.2:8791").validate()
+        AppSettings(service_url="http://203.0.113.2:8791").validate()
 
 
 def test_prompt_combines_initial_prompt_and_hints():
