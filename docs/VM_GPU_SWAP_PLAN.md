@@ -20,10 +20,10 @@ from the guest console or another trusted VM-management path.
 
 After the SSH identity was repaired, the complete legacy route was verified:
 SSH authenticates, host `8891` listens, and the guest service answers through
-the tunnel. A separate resource gate was then found: the RTX 3050 has only
-about 700 MiB free because the existing Epsilon Voice VM runtime holds about
-5.1 GiB. A Flow VM GPU switch must therefore verify available VRAM and report
-`vm_gpu_busy` rather than silently running CPU or failing a model load.
+the tunnel. The obsolete Epsilon Voice VM workload has since been removed, so
+the RTX 3050 is reserved for Whisper and Flow. Flow must still verify available
+VRAM and report `vm_gpu_busy` rather than silently running CPU or failing a
+model load when another GPU workload is present.
 
 The old router also has two design weaknesses that the port must not copy:
 
