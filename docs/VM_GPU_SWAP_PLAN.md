@@ -18,6 +18,13 @@ This is a security boundary, not a VM or VFIO/GPU boot failure. Do not delete
 or replace the old known-host entry until the new fingerprint has been verified
 from the guest console or another trusted VM-management path.
 
+After the SSH identity was repaired, the complete legacy route was verified:
+SSH authenticates, host `8891` listens, and the guest service answers through
+the tunnel. A separate resource gate was then found: the RTX 3050 has only
+about 700 MiB free because the existing Epsilon Voice VM runtime holds about
+5.1 GiB. A Flow VM GPU switch must therefore verify available VRAM and report
+`vm_gpu_busy` rather than silently running CPU or failing a model load.
+
 The old router also has two design weaknesses that the port must not copy:
 
 1. It records `backend=vm` before VM readiness has succeeded, leaving the
@@ -65,6 +72,7 @@ The manager owns:
 - SSH authentication and host-key verification;
 - one tunnel process and its stderr receipt;
 - guest API/version and health checks;
+- GPU admission based on free VRAM and active compute processes;
 - clean tunnel shutdown without touching GPU/VFIO binding.
 
 ### 2. Make switching transactional
@@ -144,7 +152,8 @@ Unit tests use fake VM-control, SSH, and guest health seams for:
 - local tunnel-port collision;
 - stale PID/no listener;
 - guest health failure or API-version mismatch;
-- CUDA model-load failure;
+- a busy VM GPU with insufficient free VRAM;
+- CUDA model-load failure; and
 - VM failure preserving the active host backend.
 
 A local integration harness then starts a fake guest HTTP service behind a real
