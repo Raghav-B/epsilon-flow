@@ -7,7 +7,18 @@ import time
 
 
 def clean_transcript(text: str) -> str:
-    return " ".join(text.split()).strip()
+    cleaned = " ".join(text.split()).strip()
+    replacements = {
+        "open claw": "OpenClaw",
+        "Open Claw": "OpenClaw",
+        "epsilon": "Epsilon",
+        "codex": "Codex",
+        "floramis": "Floramis",
+        "raghav": "Raghav",
+    }
+    for source, replacement in replacements.items():
+        cleaned = cleaned.replace(source, replacement)
+    return cleaned
 
 
 def deliver(text: str, mode: str) -> dict[str, str | None]:
