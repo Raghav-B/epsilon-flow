@@ -1,13 +1,20 @@
 from dataclasses import replace
+import getpass
 
 import pytest
 
-from epsilon_flow.settings import FIXED_MODEL, AppSettings, SettingsStore
+from epsilon_flow.settings import FIXED_MODEL, AppSettings, SettingsStore, vm_backend_config
 
 
 def test_settings_round_trip_and_private_permissions(tmp_path):
     store = SettingsStore(tmp_path)
-    expected = replace(AppSettings(), delivery_mode="paste", history_limit=12, recognition_hints="Epsilon")
+    expected = replace(
+        AppSettings(),
+        delivery_mode="paste",
+        history_limit=12,
+        recognition_hints="Epsilon",
+        compute_backend="vm",
+    )
     store.save(expected)
 
     assert store.load() == expected
@@ -32,6 +39,25 @@ def test_settings_migrates_stale_hidden_model(tmp_path):
 def test_settings_reject_remote_service():
     with pytest.raises(ValueError, match="localhost"):
         AppSettings(service_url="http://203.0.113.2:8791").validate()
+
+
+def test_settings_reject_unknown_compute_backend():
+    with pytest.raises(ValueError, match="compute backend"):
+        AppSettings(compute_backend="router").validate()
+
+
+def test_vm_backend_config_uses_current_host_facts(tmp_path):
+    state = tmp_path / "state"
+    config = vm_backend_config(config_dir=tmp_path / "config", state_directory=state)
+
+    assert config.ssh_host == "127.0.0.1"
+    assert config.ssh_user == getpass.getuser()
+    assert config.ssh_port == 2222
+    assert config.local_host == "127.0.0.1"
+    assert config.local_port == 8891
+    assert config.guest_host == "127.0.0.1"
+    assert config.guest_port == 8791
+    assert config.state_path == state / "vm-tunnel.json"
 
 
 def test_prompt_combines_initial_prompt_and_hints():

@@ -1,6 +1,7 @@
 """Validated, private settings for Epsilon Flow."""
 from __future__ import annotations
 
+import getpass
 import json
 import os
 import tempfile
@@ -11,9 +12,12 @@ from typing import Any
 
 from platformdirs import user_config_path, user_state_path
 
+from .vm_backend import BackendName, VmBackendConfig
+
 
 DELIVERY_MODES = {"copy", "paste", "type", "none"}
 DEVICES = {"auto", "cpu", "cuda"}
+COMPUTE_BACKENDS = {"local", "vm"}
 FIXED_MODEL = "turbo"
 
 
@@ -32,6 +36,7 @@ class AppSettings:
     initial_prompt: str = ""
     recognition_hints: str = ""
     service_url: str = "http://127.0.0.1:8791"
+    compute_backend: BackendName = "local"
 
     @classmethod
     def from_mapping(cls, payload: dict[str, Any]) -> "AppSettings":
@@ -49,6 +54,8 @@ class AppSettings:
             raise ValueError(f"invalid delivery mode: {self.delivery_mode}")
         if self.device not in DEVICES:
             raise ValueError(f"invalid device: {self.device}")
+        if self.compute_backend not in COMPUTE_BACKENDS:
+            raise ValueError(f"invalid compute backend: {self.compute_backend}")
         if not 1 <= self.history_limit <= 1000:
             raise ValueError("history limit must be between 1 and 1000")
         if not self.service_url.startswith("http://127.0.0.1:") and not self.service_url.startswith("http://localhost:"):
@@ -107,3 +114,37 @@ class SettingsStore:
 def state_dir() -> Path:
     override = os.environ.get("EPSILON_FLOW_STATE_DIR")
     return Path(override).expanduser() if override else Path(user_state_path("epsilon-flow", appauthor=False))
+
+
+def _integer_env(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def vm_backend_config(config_dir: Path | None = None, state_directory: Path | None = None) -> VmBackendConfig:
+    """Build the private VM route used only when the VM backend is requested.
+
+    Host mode remains the default. These machine defaults match the current
+    generic GPU VM: QEMU exposes guest SSH on host ``127.0.0.1:2222`` and the
+    Flow guest backend is reached through a host tunnel on ``127.0.0.1:8891``.
+    Environment overrides keep the public package usable on other machines
+    without changing ordinary local dictation behavior.
+    """
+    root = Path(config_dir or user_config_path("epsilon-flow", appauthor=False))
+    runtime_state_dir = Path(state_directory or state_dir())
+    return VmBackendConfig(
+        ssh_host=os.environ.get("EPSILON_FLOW_VM_SSH_HOST", "127.0.0.1"),
+        ssh_user=os.environ.get("EPSILON_FLOW_VM_SSH_USER", getpass.getuser()),
+        ssh_port=_integer_env("EPSILON_FLOW_VM_SSH_PORT", 2222),
+        known_hosts_path=Path(os.environ.get("EPSILON_FLOW_VM_KNOWN_HOSTS", root / "vm_known_hosts")).expanduser(),
+        state_path=runtime_state_dir / "vm-tunnel.json",
+        local_host="127.0.0.1",
+        local_port=_integer_env("EPSILON_FLOW_VM_TUNNEL_PORT", 8891),
+        guest_host="127.0.0.1",
+        guest_port=_integer_env("EPSILON_FLOW_VM_GUEST_PORT", 8791),
+    )

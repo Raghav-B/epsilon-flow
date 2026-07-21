@@ -16,12 +16,14 @@ import requests
 from .controller import DictationController
 from .delivery import clean_transcript, deliver
 from .history import TranscriptHistory
-from .settings import AppSettings
+from .settings import AppSettings, vm_backend_config
+from .vm_backend import BackendSelection, selection_to_dict, select_backend
 
 
 PCM_METER_CHUNK_BYTES = 2048
 PCM_FULL_SCALE = 32768.0
 AudioLevelCallback = Callable[[float], None]
+BackendSelectionCallback = Callable[[dict[str, Any]], None]
 
 
 def audio_level_from_pcm(chunk: bytes) -> float | None:
@@ -120,7 +122,24 @@ def record_audio(
     return not controller.cancel_requested
 
 
-def transcribe(path: Path, settings: AppSettings) -> dict[str, Any]:
+def transcription_service_url(settings: AppSettings, selection: BackendSelection) -> str:
+    if selection.active_backend == "vm" and selection.vm_status.tunnel_url:
+        return selection.vm_status.tunnel_url
+    return settings.service_url
+
+
+def resolve_transcription_backend(settings: AppSettings) -> tuple[BackendSelection, str]:
+    """Choose the backend for this dictation without mutating saved settings.
+
+    A requested VM route has to prove SSH identity, tunnel ownership, guest
+    health, and GPU admission before it can become active. Any failed VM check
+    returns the local service URL so normal host dictation stays available.
+    """
+    selection = select_backend(settings.compute_backend, vm_backend_config())
+    return selection, transcription_service_url(settings, selection)
+
+
+def transcribe(path: Path, settings: AppSettings, service_url: str | None = None) -> dict[str, Any]:
     fields = {
         "language": settings.language,
         "initial_prompt": settings.prompt(),
@@ -128,9 +147,10 @@ def transcribe(path: Path, settings: AppSettings) -> dict[str, Any]:
         "device": settings.device,
         "compute_type": settings.compute_type,
     }
+    target_url = service_url or settings.service_url
     with path.open("rb") as handle:
         response = requests.post(
-            f"{settings.service_url.rstrip('/')}/transcribe",
+            f"{target_url.rstrip('/')}/transcribe",
             data=fields,
             files={"file": (path.name, handle, "audio/wav")},
             timeout=600,
@@ -143,13 +163,21 @@ def run_dictation(
     settings: AppSettings,
     controller: DictationController,
     on_audio_level: AudioLevelCallback | None = None,
+    on_backend_selection: BackendSelectionCallback | None = None,
 ) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="epsilon-flow-") as directory:
         audio_path = Path(directory) / "dictation.wav"
         if not record_audio(audio_path, settings, controller, on_audio_level=on_audio_level):
             return {"cancelled": True, "text": ""}
-        controller.set_phase("transcribing")
-        result = transcribe(audio_path, settings)
+        controller.set_phase("selecting_backend", requested_backend=settings.compute_backend)
+        selection, service_url = resolve_transcription_backend(settings)
+        backend_payload = selection_to_dict(selection)
+        if on_backend_selection is not None:
+            on_backend_selection(backend_payload)
+
+        controller.set_phase("transcribing", transcription_backend=backend_payload, service_url=service_url)
+        result = transcribe(audio_path, settings, service_url=service_url)
+        result["transcription_backend"] = backend_payload
 
     transcript = clean_transcript(result.get("text", ""))
     result["text"] = transcript

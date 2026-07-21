@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import requests
 
+from epsilon_flow.settings import AppSettings
 from epsilon_flow import settings_window
 
 
@@ -57,4 +58,20 @@ def test_model_status_handles_offline_backend(monkeypatch):
 
     assert settings_window._model_status_text("http://127.0.0.1:8791", "model") == (
         "Whisper large-v3-turbo · backend offline"
+    )
+
+
+def test_compute_backend_status_reports_requested_and_active_with_failure(tmp_path, monkeypatch):
+    current = tmp_path / "current.json"
+    current.write_text(json.dumps({
+        "transcription_backend": {
+            "requested_backend": "vm",
+            "active_backend": "local",
+            "vm_status": {"failure": {"code": "gpu_busy"}},
+        }
+    }))
+    monkeypatch.setattr(settings_window, "state_dir", lambda: tmp_path)
+
+    assert settings_window._compute_backend_status_text(AppSettings(compute_backend="vm")) == (
+        "Requested VM GPU; active Host · gpu_busy"
     )

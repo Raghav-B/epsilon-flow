@@ -60,6 +60,8 @@ def test_controller_view_state_follows_phase_not_lock_lifetime(tmp_path):
 
     # Request flags belong to capture. Once the worker advances, visible state
     # must describe the real processing phase rather than resurrect recording.
+    controller.phase = "selecting_backend"
+    assert controller.view_state() == DictationViewState("busy", "Selecting backend…")
     controller.phase = "transcribing"
     assert controller.view_state() == DictationViewState("busy", "Transcribing…")
     controller.phase = "delivering"

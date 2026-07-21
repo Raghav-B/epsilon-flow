@@ -59,14 +59,22 @@ def main() -> int:
         def report_audio_level(level: float) -> None:
             GLib.idle_add(listener.set_audio_level, level)
 
+        def report_backend_selection(payload: dict) -> None:
+            GLib.idle_add(listener.set_backend_selection, payload)
+
         def worker() -> None:
             try:
-                result = run_dictation(store.load(), controller, on_audio_level=report_audio_level)
+                result = run_dictation(
+                    store.load(),
+                    controller,
+                    on_audio_level=report_audio_level,
+                    on_backend_selection=report_backend_selection,
+                )
                 GLib.idle_add(listener.hide)
                 if result.get("cancelled"):
                     notify("Epsilon Flow", "Recording discarded")
                 elif result.get("text"):
-                    notify("Epsilon Flow", "Transcript ready")
+                    notify("Epsilon Flow", _transcript_ready_message(result))
                 else:
                     notify("Epsilon Flow", "No speech detected")
             except Exception as exc:
@@ -188,6 +196,24 @@ def _show_settings(window) -> None:
         native_window.raise_()
         native_window.focus(Gtk.get_current_event_time())
     window.present_with_time(Gtk.get_current_event_time())
+
+
+def _transcript_ready_message(result: dict) -> str:
+    backend = result.get("transcription_backend")
+    if not isinstance(backend, dict):
+        return "Transcript ready"
+
+    requested = backend.get("requested_backend")
+    active = backend.get("active_backend")
+    if requested == "vm" and active == "vm":
+        return "Transcript ready via VM GPU"
+    if requested == "vm" and active == "local":
+        vm_status = backend.get("vm_status") if isinstance(backend.get("vm_status"), dict) else {}
+        failure = vm_status.get("failure") if isinstance(vm_status, dict) else None
+        if isinstance(failure, dict) and failure.get("code"):
+            return f"Transcript ready via Host · VM {failure['code']}"
+        return "Transcript ready via Host · VM unavailable"
+    return "Transcript ready via Host"
 
 
 if __name__ == "__main__":

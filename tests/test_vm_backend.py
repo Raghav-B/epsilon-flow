@@ -39,6 +39,16 @@ class FakeProcessOps:
         self.terminated_pids.append(pid)
 
 
+class RaisingProcessOps(FakeProcessOps):
+    def __init__(self, error):
+        super().__init__()
+        self.error = error
+
+    def run(self, args, *, timeout):
+        self.run_calls.append(args)
+        raise self.error
+
+
 class FakeNetworkOps:
     def __init__(self, *, listener_results=None, health_status=200, health_payload=None):
         self.listener_results = list(listener_results or [])
@@ -136,6 +146,27 @@ def test_vm_backend_host_key_failure_is_structured_and_never_starts_tunnel(tmp_p
     assert len(process_ops.run_calls) == 1
     assert "StrictHostKeyChecking=yes" in process_ops.run_calls[0]
     assert all("accept-new" not in value for call in process_ops.run_calls for value in call)
+
+
+def test_vm_backend_ssh_timeout_falls_back_with_structured_failure(tmp_path):
+    config = vm_config(tmp_path)
+    process_ops = RaisingProcessOps(TimeoutError("timed out"))
+    network_ops = FakeNetworkOps(listener_results=[False])
+
+    selection = select_backend(
+        "vm",
+        config,
+        process_ops=process_ops,
+        network_ops=network_ops,
+        clock=NoSleepClock(),
+    )
+
+    assert selection.requested_backend == "vm"
+    assert selection.active_backend == "local"
+    assert selection.vm_status.failure is not None
+    assert selection.vm_status.failure.code == "ssh_probe_failed"
+    assert selection.vm_status.failure.retryable
+    assert not process_ops.start_calls
 
 
 def test_vm_backend_identifies_tunnel_port_collision_before_tunnel_start(tmp_path):

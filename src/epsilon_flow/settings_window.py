@@ -10,7 +10,7 @@ from dataclasses import asdict
 import requests
 
 from .integrations import bind_gnome_hotkey, set_autostart
-from .settings import AppSettings, SettingsStore
+from .settings import AppSettings, SettingsStore, state_dir
 
 
 COMPUTE_TYPES = (
@@ -46,6 +46,10 @@ DELIVERY_MODES = (
     ("paste", "Paste into active app"),
     ("type", "Type into active app"),
     ("none", "Do not insert automatically"),
+)
+COMPUTE_BACKENDS = (
+    ("local", "Host backend"),
+    ("vm", "VM GPU backend"),
 )
 DEVICES = (
     ("auto", "Automatic · CUDA then CPU fallback"),
@@ -133,6 +137,34 @@ def _model_status_text(service_url: str, configured_model: str) -> str:
     model = str(config.get("model") or configured_model)
     model_name = friendly if model in {"turbo", "large-v3-turbo"} or "large-v3-turbo" in model else model
     return f"{model_name} · {device} / {compute_type}"
+
+
+def _backend_label(value: str) -> str:
+    if value == "vm":
+        return "VM GPU"
+    return "Host"
+
+
+def _compute_backend_status_text(settings: AppSettings) -> str:
+    try:
+        payload = json.loads((state_dir() / "current.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        if settings.compute_backend == "vm":
+            return "Requested VM GPU; active backend will remain Host until VM checks pass."
+        return "Requested Host; active Host."
+
+    backend = payload.get("transcription_backend")
+    if not isinstance(backend, dict):
+        return f"Requested {_backend_label(settings.compute_backend)}; backend selection has not started."
+
+    requested = str(backend.get("requested_backend", settings.compute_backend))
+    active = str(backend.get("active_backend", "local"))
+    vm_status = backend.get("vm_status") if isinstance(backend.get("vm_status"), dict) else {}
+    failure = vm_status.get("failure") if isinstance(vm_status, dict) else None
+    if isinstance(failure, dict):
+        code = str(failure.get("code", "vm_failed"))
+        return f"Requested {_backend_label(requested)}; active {_backend_label(active)} · {code}"
+    return f"Requested {_backend_label(requested)}; active {_backend_label(active)}."
 
 
 def create_settings_window(store: SettingsStore):
@@ -244,6 +276,23 @@ def create_settings_window(store: SettingsStore):
         microphone,
     )
     widgets["microphone"] = microphone
+
+    compute_backend = _combo_box(Gtk, COMPUTE_BACKENDS, current.compute_backend)
+    attach(
+        "Compute backend",
+        "Host is the safe default. VM GPU uses the existing SSH tunnel only after strict readiness checks pass.",
+        compute_backend,
+    )
+    widgets["compute_backend"] = compute_backend
+
+    compute_backend_status = Gtk.Label(label=_compute_backend_status_text(current), xalign=0)
+    compute_backend_status.set_selectable(True)
+    compute_backend_status.set_ellipsize(Pango.EllipsizeMode.END)
+    attach(
+        "Backend status",
+        "Shows requested versus active backend from the current dictation run when one is in progress.",
+        compute_backend_status,
+    )
 
     compute_type = _combo_box(Gtk, COMPUTE_TYPES, current.compute_type)
     attach(

@@ -7,6 +7,7 @@ import pytest
 
 from epsilon_flow import dictation
 from epsilon_flow.settings import AppSettings
+from epsilon_flow.vm_backend import BackendSelection, VmBackendFailure, VmBackendProgress, VmBackendStatus
 
 
 def pcm_at_decibels(decibels: float, sample_count: int = 64) -> bytes:
@@ -73,3 +74,66 @@ def test_record_audio_meters_the_same_ffmpeg_input(tmp_path, monkeypatch):
     assert captured["kwargs"]["stdout"] is subprocess.PIPE
     assert captured["kwargs"]["bufsize"] == 0
     assert levels == [pytest.approx(0.5, abs=0.01), 0.0]
+
+
+def test_transcription_route_uses_verified_vm_tunnel():
+    status = VmBackendStatus(
+        ready=True,
+        progress=(VmBackendProgress("ready", "ready"),),
+        tunnel_url="http://127.0.0.1:8891",
+    )
+    selection = BackendSelection(requested_backend="vm", active_backend="vm", vm_status=status)
+
+    assert dictation.transcription_service_url(AppSettings(), selection) == "http://127.0.0.1:8891"
+
+
+def test_run_dictation_falls_back_to_local_and_surfaces_vm_failure(tmp_path, monkeypatch):
+    captured = {"phases": [], "backend_callbacks": []}
+    failure = VmBackendFailure(
+        "host_key_verification_failed",
+        "VM SSH host key did not match.",
+        {"known_hosts_path": str(tmp_path / "vm_known_hosts")},
+        retryable=False,
+    )
+    status = VmBackendStatus(
+        ready=False,
+        progress=(VmBackendProgress("ssh_probe", "Probing VM SSH."),),
+        failure=failure,
+    )
+    selection = BackendSelection(requested_backend="vm", active_backend="local", vm_status=status)
+
+    def fake_record_audio(path, settings, controller, **kwargs):
+        path.write_bytes(b"wav")
+        return True
+
+    def fake_resolve(settings):
+        return selection, settings.service_url
+
+    def fake_transcribe(path, settings, service_url=None):
+        captured["service_url"] = service_url
+        return {"text": "hello"}
+
+    controller = SimpleNamespace(
+        set_phase=lambda phase, **metadata: captured["phases"].append((phase, metadata)),
+    )
+    monkeypatch.setattr(dictation, "record_audio", fake_record_audio)
+    monkeypatch.setattr(dictation, "resolve_transcription_backend", fake_resolve)
+    monkeypatch.setattr(dictation, "transcribe", fake_transcribe)
+
+    result = dictation.run_dictation(
+        AppSettings(compute_backend="vm", history_enabled=False, delivery_mode="none"),
+        controller,
+        on_backend_selection=captured["backend_callbacks"].append,
+    )
+
+    assert captured["service_url"] == "http://127.0.0.1:8791"
+    assert captured["phases"][0] == ("selecting_backend", {"requested_backend": "vm"})
+    transcribing_metadata = captured["phases"][1][1]
+    assert transcribing_metadata["transcription_backend"]["requested_backend"] == "vm"
+    assert transcribing_metadata["transcription_backend"]["active_backend"] == "local"
+    assert transcribing_metadata["transcription_backend"]["vm_status"]["failure"]["code"] == (
+        "host_key_verification_failed"
+    )
+    assert captured["backend_callbacks"] == [transcribing_metadata["transcription_backend"]]
+    assert result["text"] == "hello"
+    assert result["transcription_backend"] == transcribing_metadata["transcription_backend"]

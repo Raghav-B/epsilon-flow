@@ -126,6 +126,44 @@ class BackendSelection:
     vm_status: VmBackendStatus
 
 
+def progress_to_dict(progress: VmBackendProgress) -> dict[str, Any]:
+    return {
+        "phase": progress.phase,
+        "message": progress.message,
+        "details": progress.details,
+    }
+
+
+def failure_to_dict(failure: VmBackendFailure | None) -> dict[str, Any] | None:
+    if failure is None:
+        return None
+    return {
+        "code": failure.code,
+        "message": failure.message,
+        "details": failure.details,
+        "retryable": failure.retryable,
+    }
+
+
+def status_to_dict(status: VmBackendStatus) -> dict[str, Any]:
+    return {
+        "ready": status.ready,
+        "progress": [progress_to_dict(item) for item in status.progress],
+        "failure": failure_to_dict(status.failure),
+        "tunnel_url": status.tunnel_url,
+        "free_vram_mb": status.free_vram_mb,
+    }
+
+
+def selection_to_dict(selection: BackendSelection) -> dict[str, Any]:
+    """Return the JSON-safe runtime contract surfaced to tray and CLI state."""
+    return {
+        "requested_backend": selection.requested_backend,
+        "active_backend": selection.active_backend,
+        "vm_status": status_to_dict(selection.vm_status),
+    }
+
+
 class SubprocessOps:
     def run(self, args: list[str], *, timeout: float) -> ProcessResult:
         completed = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
@@ -375,10 +413,20 @@ class GpuAdmissionStatus:
 def check_gpu_admission(config: VmBackendConfig, process_ops: ProcessOps) -> GpuAdmissionStatus:
     progress = [VmBackendProgress("gpu_admission", "Checking guest GPU free VRAM before VM activation.")]
     remote_command = " ".join(config.gpu_query_command)
-    result = process_ops.run(
-        strict_ssh_base_args(config) + [ssh_destination(config), remote_command],
-        timeout=config.command_timeout_seconds,
-    )
+    try:
+        result = process_ops.run(
+            strict_ssh_base_args(config) + [ssh_destination(config), remote_command],
+            timeout=config.command_timeout_seconds,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        failure = VmBackendFailure(
+            "gpu_query_failed",
+            "Could not run guest GPU memory query for VM admission.",
+            {"error": f"{type(exc).__name__}: {exc}"},
+            retryable=True,
+        )
+        progress.append(VmBackendProgress("failed", failure.message, failure.details))
+        return GpuAdmissionStatus(tuple(progress), failure=failure)
     if result.returncode != 0:
         failure = VmBackendFailure(
             "gpu_query_failed",
@@ -534,7 +582,17 @@ def run_strict_ssh_probe(config: VmBackendConfig, process_ops: ProcessOps) -> Ss
             {"known_hosts_path": str(config.known_hosts_path)},
         )
     ]
-    result = process_ops.run(args, timeout=config.command_timeout_seconds)
+    try:
+        result = process_ops.run(args, timeout=config.command_timeout_seconds)
+    except (OSError, subprocess.SubprocessError) as exc:
+        failure = VmBackendFailure(
+            "ssh_probe_failed",
+            "VM SSH probe failed before the tunnel could be opened.",
+            {"error": f"{type(exc).__name__}: {exc}"},
+            retryable=True,
+        )
+        progress.append(VmBackendProgress("failed", failure.message, failure.details))
+        return SshProbeStatus(tuple(progress), failure=failure)
     if result.returncode == 0:
         return SshProbeStatus(tuple(progress))
 
