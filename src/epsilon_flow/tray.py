@@ -73,6 +73,8 @@ def main() -> int:
                 GLib.idle_add(listener.hide)
                 if result.get("cancelled"):
                     notify("Epsilon Flow", "Recording discarded")
+                elif result.get("error"):
+                    notify("Epsilon Flow unavailable", result["error"])
                 elif result.get("text"):
                     notify("Epsilon Flow", _transcript_ready_message(result))
                 else:

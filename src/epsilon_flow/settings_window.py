@@ -142,6 +142,8 @@ def _model_status_text(service_url: str, configured_model: str) -> str:
 def _backend_label(value: str) -> str:
     if value == "vm":
         return "VM GPU"
+    if value == "unavailable":
+        return "Unavailable"
     return "Host"
 
 

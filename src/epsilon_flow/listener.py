@@ -648,6 +648,8 @@ class DictationListener(Gtk.Window):
             failure = vm_status.get("failure") if isinstance(vm_status, dict) else None
             if active_backend == "vm":
                 message = "VM GPU transcription active"
+            elif active_backend == "unavailable":
+                message = "VM unavailable; no local fallback is running"
             elif isinstance(failure, dict):
                 code = failure.get("code")
                 if code == "gpu_busy":

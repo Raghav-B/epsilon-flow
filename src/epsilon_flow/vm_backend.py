@@ -20,6 +20,7 @@ import requests
 
 
 BackendName = Literal["local", "vm"]
+ActiveBackendName = Literal["local", "vm", "unavailable"]
 ProgressPhase = Literal["idle", "gpu_admission", "ssh_probe", "tunnel", "guest_health", "ready", "failed", "busy"]
 FailureCode = Literal[
     "gpu_query_failed",
@@ -117,12 +118,13 @@ class VmBackendStatus:
     failure: VmBackendFailure | None = None
     tunnel_url: str | None = None
     free_vram_mb: int | None = None
+    model_loaded: bool = False
 
 
 @dataclass(frozen=True)
 class BackendSelection:
     requested_backend: BackendName
-    active_backend: BackendName
+    active_backend: ActiveBackendName
     vm_status: VmBackendStatus
 
 
@@ -276,27 +278,38 @@ def activate_vm_backend(
     ssh_probe = run_strict_ssh_probe(config, process_ops)
     progress.extend(ssh_probe.progress)
     if ssh_probe.failure is not None:
-        return VmBackendStatus(
-            ready=False,
-            progress=tuple(progress),
-            failure=ssh_probe.failure,
-        )
-
-    gpu_status = check_gpu_admission(config, process_ops)
-    progress.extend(gpu_status.progress)
-    if gpu_status.failure is not None:
-        return VmBackendStatus(
-            ready=False,
-            progress=tuple(progress),
-            failure=gpu_status.failure,
-            free_vram_mb=gpu_status.free_vram_mb,
-        )
+        return VmBackendStatus(ready=False, progress=tuple(progress), failure=ssh_probe.failure)
 
     reusable_tunnel = read_tunnel_state(config.state_path)
     if reusable_tunnel is not None:
         reused = verify_reusable_tunnel(config, reusable_tunnel, process_ops, network_ops)
         progress.extend(reused.progress)
         if reused.ready:
+            if reused.model_loaded:
+                progress.append(
+                    VmBackendProgress(
+                        "gpu_admission",
+                        "Guest CUDA model is already warm; keeping its verified VM backend active.",
+                        {"free_vram_mb": reused.free_vram_mb},
+                    )
+                )
+                return VmBackendStatus(
+                    ready=True,
+                    progress=tuple(progress),
+                    tunnel_url=reused.tunnel_url,
+                    free_vram_mb=reused.free_vram_mb,
+                    model_loaded=True,
+                )
+
+            gpu_status = check_gpu_admission(config, process_ops)
+            progress.extend(gpu_status.progress)
+            if gpu_status.failure is not None:
+                return VmBackendStatus(
+                    ready=False,
+                    progress=tuple(progress),
+                    failure=gpu_status.failure,
+                    free_vram_mb=gpu_status.free_vram_mb,
+                )
             return VmBackendStatus(
                 ready=True,
                 progress=tuple(progress),
@@ -315,12 +328,7 @@ def activate_vm_backend(
                 )
             )
         elif reused.failure is not None:
-            return VmBackendStatus(
-                ready=False,
-                progress=tuple(progress),
-                failure=reused.failure,
-                free_vram_mb=gpu_status.free_vram_mb,
-            )
+            return VmBackendStatus(ready=False, progress=tuple(progress), failure=reused.failure)
 
     # If a listener is already present without our tracked tunnel, we cannot
     # prove it reaches the intended guest. Failing here prevents silently binding
@@ -342,18 +350,12 @@ def activate_vm_backend(
                 {"local_host": config.local_host, "local_port": config.local_port},
                 retryable=False,
             ),
-            free_vram_mb=gpu_status.free_vram_mb,
         )
 
     started = start_tunnel(config, process_ops)
     progress.extend(started.progress)
     if started.failure is not None or started.pid is None:
-        return VmBackendStatus(
-            ready=False,
-            progress=tuple(progress),
-            failure=started.failure,
-            free_vram_mb=gpu_status.free_vram_mb,
-        )
+        return VmBackendStatus(ready=False, progress=tuple(progress), failure=started.failure)
 
     if not wait_for_listener(config, network_ops, clock):
         process_ops.terminate(started.pid)
@@ -373,19 +375,38 @@ def activate_vm_backend(
                 {"pid": started.pid, "local_host": config.local_host, "local_port": config.local_port},
                 retryable=True,
             ),
-            free_vram_mb=gpu_status.free_vram_mb,
         )
 
     health_status = check_guest_health(config, network_ops)
     progress.extend(health_status.progress)
     if health_status.failure is not None:
         process_ops.terminate(started.pid)
-        return VmBackendStatus(
-            ready=False,
-            progress=tuple(progress),
-            failure=health_status.failure,
-            free_vram_mb=gpu_status.free_vram_mb,
+        return VmBackendStatus(ready=False, progress=tuple(progress), failure=health_status.failure)
+
+    # The first model load needs room for its CUDA allocation. Later requests
+    # see less free VRAM because this same guest service keeps that model warm;
+    # a healthy warm CUDA model is already the admission proof we need.
+    if health_status.model_loaded:
+        progress.append(
+            VmBackendProgress(
+                "gpu_admission",
+                "Guest CUDA model is already warm; keeping its verified VM backend active.",
+                {"free_vram_mb": health_status.free_vram_mb},
+            )
         )
+        free_vram_mb = health_status.free_vram_mb
+    else:
+        gpu_status = check_gpu_admission(config, process_ops)
+        progress.extend(gpu_status.progress)
+        if gpu_status.failure is not None:
+            process_ops.terminate(started.pid)
+            return VmBackendStatus(
+                ready=False,
+                progress=tuple(progress),
+                failure=gpu_status.failure,
+                free_vram_mb=gpu_status.free_vram_mb,
+            )
+        free_vram_mb = gpu_status.free_vram_mb
 
     write_tunnel_state(config.state_path, TunnelState(pid=started.pid, local_port=config.local_port))
     progress.append(
@@ -399,7 +420,8 @@ def activate_vm_backend(
         ready=True,
         progress=tuple(progress),
         tunnel_url=tunnel_url(config),
-        free_vram_mb=gpu_status.free_vram_mb,
+        free_vram_mb=free_vram_mb,
+        model_loaded=health_status.model_loaded,
     )
 
 
@@ -564,7 +586,13 @@ def verify_reusable_tunnel(
     progress.extend(health_status.progress)
     if health_status.failure is not None:
         return VmBackendStatus(ready=False, progress=tuple(progress), failure=health_status.failure)
-    return VmBackendStatus(ready=True, progress=tuple(progress), tunnel_url=tunnel_url(config))
+    return VmBackendStatus(
+        ready=True,
+        progress=tuple(progress),
+        tunnel_url=tunnel_url(config),
+        free_vram_mb=health_status.free_vram_mb,
+        model_loaded=health_status.model_loaded,
+    )
 
 
 @dataclass(frozen=True)
@@ -690,7 +718,26 @@ def check_guest_health(config: VmBackendConfig, network_ops: NetworkOps) -> VmBa
         )
         progress.append(VmBackendProgress("failed", failure.message, failure.details))
         return VmBackendStatus(ready=False, progress=tuple(progress), failure=failure)
-    return VmBackendStatus(ready=True, progress=tuple(progress), tunnel_url=tunnel_url(config))
+
+    model = payload.get("model")
+    gpu = payload.get("gpu")
+    model_loaded = (
+        payload.get("model_loaded") is True
+        and isinstance(model, dict)
+        and model.get("device") == "cuda"
+        and isinstance(gpu, dict)
+        and gpu.get("available") is True
+    )
+    free_vram_mb = gpu.get("memory_free_mb") if isinstance(gpu, dict) else None
+    if not isinstance(free_vram_mb, int):
+        free_vram_mb = None
+    return VmBackendStatus(
+        ready=True,
+        progress=tuple(progress),
+        tunnel_url=tunnel_url(config),
+        free_vram_mb=free_vram_mb,
+        model_loaded=model_loaded,
+    )
 
 
 def tunnel_url(config: VmBackendConfig) -> str:

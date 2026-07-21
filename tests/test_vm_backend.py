@@ -185,7 +185,7 @@ def test_vm_backend_identifies_tunnel_port_collision_before_tunnel_start(tmp_pat
     assert selection.active_backend == "local"
     assert selection.vm_status.failure is not None
     assert selection.vm_status.failure.code == "tunnel_port_collision"
-    assert len(process_ops.run_calls) == 2
+    assert len(process_ops.run_calls) == 1
     assert not process_ops.start_calls
     assert not network_ops.health_calls
 
@@ -230,9 +230,11 @@ def test_vm_backend_reports_guest_gpu_busy_instead_of_vm_ready(tmp_path):
     assert selection.vm_status.failure is not None
     assert selection.vm_status.failure.code == "gpu_busy"
     assert selection.vm_status.failure.retryable
-    assert not process_ops.start_calls
-    assert not network_ops.listener_calls
+    assert process_ops.start_calls
+    assert network_ops.listener_calls == [("127.0.0.1", 8891), ("127.0.0.1", 8891)]
     assert process_ops.run_calls[1][-1].startswith("nvidia-smi")
+    assert process_ops.terminated_pids == [4242]
+    assert not config.state_path.exists()
 
 
 def test_failed_vm_activation_keeps_requested_and_active_backends_separate(tmp_path):
@@ -265,3 +267,32 @@ def test_strict_ssh_args_use_explicit_known_hosts_without_accept_new(tmp_path):
     assert "StrictHostKeyChecking=yes" in args
     assert f"UserKnownHostsFile={config.known_hosts_path}" in args
     assert all("accept-new" not in value for value in args)
+
+
+def test_vm_backend_reuses_a_healthy_warm_cuda_model_without_reapplying_first_load_gate(tmp_path):
+    config = vm_config(tmp_path)
+    config.state_path.write_text(json.dumps({"pid": 4242, "local_port": 8891}))
+    process_ops = FakeProcessOps(gpu_stdout="1024\n", alive_pids={4242})
+    network_ops = FakeNetworkOps(
+        listener_results=[True],
+        health_payload={
+            "ok": True,
+            "model_loaded": True,
+            "model": {"device": "cuda"},
+            "gpu": {"available": True, "memory_free_mb": 1860},
+        },
+    )
+
+    selection = select_backend(
+        "vm",
+        config,
+        process_ops=process_ops,
+        network_ops=network_ops,
+        clock=NoSleepClock(),
+    )
+
+    assert selection.active_backend == "vm"
+    assert selection.vm_status.model_loaded
+    assert selection.vm_status.free_vram_mb == 1860
+    assert len(process_ops.run_calls) == 1
+    assert not process_ops.start_calls

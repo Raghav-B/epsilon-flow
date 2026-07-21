@@ -3,7 +3,7 @@ import getpass
 
 import pytest
 
-from epsilon_flow.settings import FIXED_MODEL, AppSettings, SettingsStore, vm_backend_config
+from epsilon_flow.settings import FIXED_MODEL, LOCAL_SERVICE_URL, AppSettings, SettingsStore, vm_backend_config
 
 
 def test_settings_round_trip_and_private_permissions(tmp_path):
@@ -68,3 +68,11 @@ def test_prompt_combines_initial_prompt_and_hints():
 def test_prompt_labels_recognition_hints_when_used_alone():
     settings = AppSettings(recognition_hints="Epsilon, CTranslate2")
     assert settings.prompt() == "Recognition hints: Epsilon, CTranslate2"
+
+
+def test_settings_migrates_legacy_router_url_to_direct_local_service(tmp_path):
+    store = SettingsStore(tmp_path)
+    store.config_dir.mkdir(parents=True, exist_ok=True)
+    store.path.write_text('{"service_url": "http://127.0.0.1:8791"}')
+
+    assert store.load().service_url == LOCAL_SERVICE_URL

@@ -34,18 +34,23 @@ The old router also has two design weaknesses that the port must not copy:
 
 ## Intended Epsilon Flow shape
 
-Epsilon Flow keeps its existing host backend at `127.0.0.1:8791`. VM switching
-belongs in the Epsilon Flow desktop/client layer, which already owns the
-recording-to-transcription request boundary. It selects one of two loopback
-backend URLs for each dictation request:
+Epsilon Flow owns the recording-to-transcription request boundary and selects
+one of two direct loopback URLs for each dictation request:
 
-- **Host backend:** `http://127.0.0.1:8791`
-- **VM backend:** host tunnel `http://127.0.0.1:8891`, forwarded to the guest
-  Epsilon Flow backend at guest `127.0.0.1:8791`
+- **Local fallback:** `http://127.0.0.1:8794`, only when that direct service is
+  deliberately running and its `/health` endpoint passes.
+- **VM backend:** host tunnel `http://127.0.0.1:8891`, forwarded to guest
+  `127.0.0.1:8791`.
 
-This deliberately does **not** port the old HTTP router that took over port
-`8791`. The Flow client can dispatch directly after the VM is proven ready,
-leaving the normal local service simple and available as the safe fallback.
+Flow never uses the old HTTP router on `127.0.0.1:8791`: its global backend
+state can point back to VM and therefore cannot prove a local fallback. A VM
+failure with no healthy direct local service is surfaced as **unavailable**;
+it never silently re-enters the VM route.
+
+The first CUDA model load still requires a free-VRAM admission check. Once the
+verified guest health endpoint reports its own CUDA model is already warm, Flow
+keeps using it even though its model allocation naturally leaves less than the
+first-load threshold free.
 
 The guest must run the same Epsilon Flow backend API/version as the host
 release. The legacy guest service uses a different application and model

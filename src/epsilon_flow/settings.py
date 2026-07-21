@@ -19,6 +19,8 @@ DELIVERY_MODES = {"copy", "paste", "type", "none"}
 DEVICES = {"auto", "cpu", "cuda"}
 COMPUTE_BACKENDS = {"local", "vm"}
 FIXED_MODEL = "turbo"
+LOCAL_SERVICE_URL = "http://127.0.0.1:8794"
+LEGACY_ROUTER_URL = "http://127.0.0.1:8791"
 
 
 @dataclass
@@ -35,7 +37,7 @@ class AppSettings:
     language: str = "auto"
     initial_prompt: str = ""
     recognition_hints: str = ""
-    service_url: str = "http://127.0.0.1:8791"
+    service_url: str = LOCAL_SERVICE_URL
     compute_backend: BackendName = "local"
 
     @classmethod
@@ -45,6 +47,10 @@ class AppSettings:
         # Model choice is intentionally hidden in this release. Migrate stale
         # IDs from older settings files onto Faster-Whisper's supported alias.
         values["model"] = FIXED_MODEL
+        # Flow now owns a direct VM tunnel. Do not use the old global router as
+        # its local fallback because that router can be configured back to VM.
+        if values.get("service_url") == LEGACY_ROUTER_URL:
+            values["service_url"] = LOCAL_SERVICE_URL
         settings = cls(**values)
         settings.validate()
         return settings
