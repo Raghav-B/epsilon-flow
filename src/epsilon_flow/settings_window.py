@@ -10,7 +10,7 @@ from datetime import datetime
 
 import requests
 
-from .integrations import bind_gnome_hotkey, set_autostart
+from .integrations import bind_gnome_hotkey, set_autostart, set_gnome_hotkey_binding
 from .settings import AppSettings, SettingsStore, validate_service_url
 
 
@@ -215,11 +215,31 @@ def create_settings_window(store: SettingsStore):
     hotkey.set_always_show_image(True)
     hotkey.set_tooltip_text("Click here, then press the shortcut you want to use")
     hotkey.epsilon_accelerator = current.hotkey
+    hotkey.epsilon_capture_active = False
     parsed_key, parsed_modifiers = Gtk.accelerator_parse(current.hotkey)
     hotkey.epsilon_display = Gtk.accelerator_get_label(parsed_key, parsed_modifiers) if parsed_key else current.hotkey
     hotkey.set_label(hotkey.epsilon_display)
 
+    def restore_registered_hotkey() -> None:
+        if not hotkey.epsilon_capture_active:
+            return
+        try:
+            set_gnome_hotkey_binding(current.hotkey)
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            # Saving still reapplies the selected shortcut through the normal
+            # integration path. Keep capture usable on non-GNOME desktops.
+            pass
+        hotkey.epsilon_capture_active = False
+
     def begin_hotkey_capture(_button) -> None:
+        try:
+            # GNOME consumes a registered global shortcut before this button
+            # can see it. Pause Flow's saved binding only while listening so
+            # users can enter the shortcut that is already assigned.
+            set_gnome_hotkey_binding("")
+            hotkey.epsilon_capture_active = True
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            hotkey.epsilon_capture_active = False
         hotkey.set_label("Press shortcut…")
         hotkey.grab_focus()
 
@@ -228,6 +248,7 @@ def create_settings_window(store: SettingsStore):
         if key_name in MODIFIER_KEYS:
             return True
         if key_name == "Escape":
+            restore_registered_hotkey()
             hotkey.set_label(hotkey.epsilon_display)
             window.set_focus(None)
             return True
@@ -238,10 +259,12 @@ def create_settings_window(store: SettingsStore):
         accelerator = Gtk.accelerator_name(event.keyval, modifiers)
         hotkey.epsilon_accelerator = accelerator
         hotkey.epsilon_display = Gtk.accelerator_get_label(event.keyval, modifiers)
+        restore_registered_hotkey()
         hotkey.set_label(hotkey.epsilon_display)
         return True
 
     def finish_hotkey_capture(_button, _event) -> bool:
+        restore_registered_hotkey()
         hotkey.set_label(hotkey.epsilon_display)
         return False
 
@@ -403,6 +426,7 @@ def create_settings_window(store: SettingsStore):
     root.pack_end(actions, False, False, 0)
 
     cancel.connect("clicked", lambda _button: window.destroy())
+    window.connect("destroy", lambda _window: restore_registered_hotkey())
 
     refresh_generation = 0
 

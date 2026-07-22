@@ -44,6 +44,14 @@ def set_autostart(enabled: bool) -> Path:
     return path
 
 
+def set_gnome_hotkey_binding(accelerator: str) -> None:
+    """Change only Flow's registered accelerator, including temporary suspension."""
+    if not shutil.which("gsettings"):
+        raise RuntimeError("gsettings is required for GNOME hotkey integration")
+    schema_path = f"{SCHEMA}:{HOTKEY_PATH}"
+    subprocess.run(["gsettings", "set", schema_path, "binding", accelerator], check=True)
+
+
 def bind_gnome_hotkey(accelerator: str) -> None:
     if not shutil.which("gsettings"):
         raise RuntimeError("gsettings is required for GNOME hotkey integration")
@@ -59,4 +67,4 @@ def bind_gnome_hotkey(accelerator: str) -> None:
     schema_path = f"{SCHEMA}:{HOTKEY_PATH}"
     subprocess.run(["gsettings", "set", schema_path, "name", "Epsilon Flow"], check=True)
     subprocess.run(["gsettings", "set", schema_path, "command", f"{executable} trigger"], check=True)
-    subprocess.run(["gsettings", "set", schema_path, "binding", accelerator], check=True)
+    set_gnome_hotkey_binding(accelerator)
