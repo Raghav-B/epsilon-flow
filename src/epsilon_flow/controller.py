@@ -14,7 +14,7 @@ from typing import Callable, Literal, TextIO
 from .settings import state_dir
 
 
-ACTIVE_PHASES = {"starting", "recording", "selecting_backend", "transcribing", "delivering"}
+ACTIVE_PHASES = {"starting", "recording", "transcribing", "delivering"}
 
 
 @dataclass(frozen=True)
@@ -93,8 +93,6 @@ class DictationController:
                 return DictationViewState("busy", "Finishing recording…")
             title = "Starting microphone…" if self.phase == "starting" else "Recording"
             return DictationViewState("recording", title)
-        if self.phase == "selecting_backend":
-            return DictationViewState("busy", "Selecting backend…")
         if self.phase == "transcribing":
             return DictationViewState("busy", "Transcribing…")
         return DictationViewState("busy", "Delivering transcript…")

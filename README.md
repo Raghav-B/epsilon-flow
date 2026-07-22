@@ -12,7 +12,8 @@ Epsilon Flow is a public, local-first Linux dictation app. A GTK3 tray owns a re
 - Automatic CUDA-to-CPU fallback when **Device** is set to Automatic.
 - Native two-environment install or Docker Compose CPU/CUDA profiles.
 - Selectable microphone, language, compute type, device, and delivery mode.
-- Configurable Initial Prompt and Recognition Hints for context and specialist names.
+- Configurable names/terms glossary plus an optional advanced transcript-style example.
+- One private transcription-service URL for the bundled backend, a LAN service, or a user-managed SSH tunnel.
 - Clipboard copy, paste, virtual typing, or transcript-only delivery.
 - Bounded local transcript snippets with explicit play-to-record; opening history never starts the microphone.
 - Ubuntu 22.04, 24.04, and 26.04 GNOME/Wayland support.
@@ -65,7 +66,9 @@ The installer creates systemd user services for both the loopback backend and th
 ./scripts/service.sh tray-logs
 ```
 
-Open **Settings…** from the tray to configure the hotkey, login autostart, delivery, history, microphone, device/compute type/language, Initial Prompt, and Recognition Hints. **Save** applies integrations and closes Settings. Pressing the hotkey again stops and finalizes an active recording.
+Open **Settings…** from the tray to configure the hotkey, login autostart, delivery, history, microphone, device/compute type/language, transcription-service URL, names and terms, and the optional advanced style example. The service row checks the configured URL when Settings opens; **Refresh** checks the URL currently typed without saving it first. **Save** applies integrations and closes Settings. Pressing the hotkey again stops and finalizes an active recording.
+
+Leave **Style example** empty unless transcripts repeatedly use the wrong casing, punctuation, or prose style. If needed, enter a short piece of natural transcript text in the desired style. Names, acronyms, and technical vocabulary belong in **Names and terms** instead; Whisper treats the combined text as decoding context, not as guaranteed instructions or a strict dictionary.
 
 Epsilon Flow currently uses Faster-Whisper's supported `turbo` alias for Whisper large-v3-turbo. It downloads into the normal faster-whisper cache on first use. Advanced Docker deployments can still override `EPSILON_FLOW_MODEL`, but model choice is intentionally fixed in the everyday desktop UI.
 
@@ -83,6 +86,26 @@ nvidia-smi
 ```
 
 The helper installs cuBLAS/cuDNN only inside Epsilon Flow's backend environment, adds their library path to the backend's systemd user service, and performs a strict CUDA/Float16 model-load check. It does not silently fall back to CPU. If `nvidia-smi` fails with Secure Boot enabled, complete your distribution's NVIDIA MOK enrollment/signing flow first.
+
+## Private LAN or SSH-tunnel backend
+
+The tray sends plain HTTP requests to the single **Transcription service** URL in Settings. Epsilon Flow accepts loopback addresses, literal private LAN IPs, and IPv6 unique-local addresses; public hosts and authenticated URLs are rejected until the protocol has authentication. The service must provide Epsilon Flow's existing API:
+
+- `GET /health`
+- `POST /transcribe` using the same multipart audio/settings fields as the bundled client
+
+To keep a backend private on another machine, create the SSH tunnel yourself and point Flow at its local end. For example, this forwards local port `8891` to backend port `8791` on the SSH host:
+
+```bash
+ssh -N \
+  -L 127.0.0.1:8891:127.0.0.1:8791 \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=15 \
+  -o ServerAliveCountMax=2 \
+  user@remote-host
+```
+
+Then set **Transcription service** to `http://127.0.0.1:8891`. Epsilon Flow deliberately does not create, monitor, or restart the tunnel; one configured URL is the complete routing decision.
 
 ## Docker CPU or CUDA backend
 

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import math
-from dataclasses import replace
 import shutil
 import struct
 import subprocess
@@ -17,14 +16,12 @@ import requests
 from .controller import DictationController
 from .delivery import clean_transcript, deliver
 from .history import TranscriptHistory
-from .settings import AppSettings, vm_backend_config
-from .vm_backend import BackendSelection, selection_to_dict, select_backend
+from .settings import AppSettings
 
 
 PCM_METER_CHUNK_BYTES = 2048
 PCM_FULL_SCALE = 32768.0
 AudioLevelCallback = Callable[[float], None]
-BackendSelectionCallback = Callable[[dict[str, Any]], None]
 
 
 def audio_level_from_pcm(chunk: bytes) -> float | None:
@@ -123,42 +120,7 @@ def record_audio(
     return not controller.cancel_requested
 
 
-def transcription_service_url(settings: AppSettings, selection: BackendSelection) -> str | None:
-    if selection.active_backend == "vm" and selection.vm_status.tunnel_url:
-        return selection.vm_status.tunnel_url
-    if selection.active_backend == "local":
-        return settings.service_url
-    return None
-
-
-def local_service_is_ready(service_url: str) -> bool:
-    """Only report a local fallback when its direct service is actually healthy."""
-    try:
-        response = requests.get(f"{service_url.rstrip('/')}/health", timeout=2)
-        payload = response.json() if response.content else {}
-    except (requests.RequestException, ValueError):
-        return False
-    return response.status_code == 200 and payload.get("ok") is True
-
-
-def resolve_transcription_backend(settings: AppSettings) -> tuple[BackendSelection, str | None]:
-    """Choose a proven VM route, a healthy direct local route, or no backend.
-
-    The old router endpoint can globally point back at VM. Flow deliberately
-    avoids it so a VM failure cannot masquerade as a local fallback.
-    """
-    selection = select_backend(settings.compute_backend, vm_backend_config())
-    service_url = transcription_service_url(settings, selection)
-    if selection.active_backend == "vm":
-        return selection, service_url
-
-    if local_service_is_ready(settings.service_url):
-        return selection, settings.service_url
-
-    return replace(selection, active_backend="unavailable"), None
-
-
-def transcribe(path: Path, settings: AppSettings, service_url: str | None = None) -> dict[str, Any]:
+def transcribe(path: Path, settings: AppSettings) -> dict[str, Any]:
     fields = {
         "language": settings.language,
         "initial_prompt": settings.prompt(),
@@ -166,10 +128,9 @@ def transcribe(path: Path, settings: AppSettings, service_url: str | None = None
         "device": settings.device,
         "compute_type": settings.compute_type,
     }
-    target_url = service_url or settings.service_url
     with path.open("rb") as handle:
         response = requests.post(
-            f"{target_url.rstrip('/')}/transcribe",
+            f"{settings.service_url.rstrip('/')}/transcribe",
             data=fields,
             files={"file": (path.name, handle, "audio/wav")},
             timeout=600,
@@ -182,28 +143,15 @@ def run_dictation(
     settings: AppSettings,
     controller: DictationController,
     on_audio_level: AudioLevelCallback | None = None,
-    on_backend_selection: BackendSelectionCallback | None = None,
 ) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="epsilon-flow-") as directory:
         audio_path = Path(directory) / "dictation.wav"
         if not record_audio(audio_path, settings, controller, on_audio_level=on_audio_level):
             return {"cancelled": True, "text": ""}
-        controller.set_phase("selecting_backend", requested_backend=settings.compute_backend)
-        selection, service_url = resolve_transcription_backend(settings)
-        backend_payload = selection_to_dict(selection)
-        if on_backend_selection is not None:
-            on_backend_selection(backend_payload)
-
-        if service_url is None:
-            return {
-                "text": "",
-                "transcription_backend": backend_payload,
-                "error": "VM is unavailable and the direct local fallback is not running.",
-            }
-
-        controller.set_phase("transcribing", transcription_backend=backend_payload, service_url=service_url)
-        result = transcribe(audio_path, settings, service_url=service_url)
-        result["transcription_backend"] = backend_payload
+        # The configured service URL is the only route. Local services, LAN
+        # servers, and user-managed SSH tunnels all implement the same API.
+        controller.set_phase("transcribing", service_url=settings.service_url)
+        result = transcribe(audio_path, settings)
 
     transcript = clean_transcript(result.get("text", ""))
     result["text"] = transcript

@@ -5,12 +5,13 @@ import json
 import shutil
 import subprocess
 import threading
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
+from datetime import datetime
 
 import requests
 
 from .integrations import bind_gnome_hotkey, set_autostart
-from .settings import AppSettings, SettingsStore, state_dir
+from .settings import AppSettings, SettingsStore, validate_service_url
 
 
 COMPUTE_TYPES = (
@@ -46,10 +47,6 @@ DELIVERY_MODES = (
     ("paste", "Paste into active app"),
     ("type", "Type into active app"),
     ("none", "Do not insert automatically"),
-)
-COMPUTE_BACKENDS = (
-    ("local", "Host backend"),
-    ("vm", "VM GPU backend"),
 )
 DEVICES = (
     ("auto", "Automatic · CUDA then CPU fallback"),
@@ -120,53 +117,40 @@ def _field_label(Gtk, title: str, description: str):
     return box
 
 
-def _model_status_text(service_url: str, configured_model: str) -> str:
-    friendly = "Whisper large-v3-turbo"
+@dataclass(frozen=True)
+class TranscriptionServiceStatus:
+    summary: str
+    detail: str
+
+
+def _transcription_service_status(service_url: str, configured_model: str) -> TranscriptionServiceStatus:
     try:
-        response = requests.get(f"{service_url.rstrip('/')}/models/status", timeout=2)
+        validate_service_url(service_url)
+    except ValueError as exc:
+        return TranscriptionServiceStatus("Invalid URL", str(exc))
+
+    try:
+        response = requests.get(f"{service_url.rstrip('/')}/health", timeout=2)
         response.raise_for_status()
         payload = response.json()
-    except (requests.RequestException, ValueError):
-        return f"{friendly} · backend offline"
+    except requests.RequestException as exc:
+        return TranscriptionServiceStatus("Offline", str(exc))
+    except ValueError:
+        return TranscriptionServiceStatus("Invalid response", "The health endpoint did not return JSON.")
 
+    if not isinstance(payload, dict) or payload.get("ok") is not True:
+        return TranscriptionServiceStatus("Invalid response", "The health endpoint did not report ok=true.")
+
+    friendly = "Whisper large-v3-turbo"
     config = payload.get("model")
     if not payload.get("model_loaded") or not isinstance(config, dict):
-        return f"{friendly} · loads on first dictation"
+        return TranscriptionServiceStatus("Online", f"{friendly} · loads on first dictation")
+
     device = str(config.get("device", "unknown")).upper()
     compute_type = str(config.get("compute_type", "default"))
     model = str(config.get("model") or configured_model)
     model_name = friendly if model in {"turbo", "large-v3-turbo"} or "large-v3-turbo" in model else model
-    return f"{model_name} · {device} / {compute_type}"
-
-
-def _backend_label(value: str) -> str:
-    if value == "vm":
-        return "VM GPU"
-    if value == "unavailable":
-        return "Unavailable"
-    return "Host"
-
-
-def _compute_backend_status_text(settings: AppSettings) -> str:
-    try:
-        payload = json.loads((state_dir() / "current.json").read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        if settings.compute_backend == "vm":
-            return "Requested VM GPU; active backend will remain Host until VM checks pass."
-        return "Requested Host; active Host."
-
-    backend = payload.get("transcription_backend")
-    if not isinstance(backend, dict):
-        return f"Requested {_backend_label(settings.compute_backend)}; backend selection has not started."
-
-    requested = str(backend.get("requested_backend", settings.compute_backend))
-    active = str(backend.get("active_backend", "local"))
-    vm_status = backend.get("vm_status") if isinstance(backend.get("vm_status"), dict) else {}
-    failure = vm_status.get("failure") if isinstance(vm_status, dict) else None
-    if isinstance(failure, dict):
-        code = str(failure.get("code", "vm_failed"))
-        return f"Requested {_backend_label(requested)}; active {_backend_label(active)} · {code}"
-    return f"Requested {_backend_label(requested)}; active {_backend_label(active)}."
+    return TranscriptionServiceStatus("Online", f"{model_name} · {device} / {compute_type}")
 
 
 def create_settings_window(store: SettingsStore):
@@ -174,7 +158,7 @@ def create_settings_window(store: SettingsStore):
 
     gi.require_version("Gdk", "3.0")
     gi.require_version("Gtk", "3.0")
-    from gi.repository import Gdk, GLib, Gtk, Pango
+    from gi.repository import Gdk, GLib, Gtk
 
     current = store.load()
     window = Gtk.Window(title="Epsilon Flow Settings")
@@ -187,7 +171,7 @@ def create_settings_window(store: SettingsStore):
     provider = Gtk.CssProvider()
     provider.load_from_data(
         b"window#settings_window { background-color: @theme_bg_color; }"
-        b"#model_status { font-weight: 600; }"
+        b"#service_status { font-weight: 600; }"
     )
     window.get_style_context().add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1)
 
@@ -279,22 +263,37 @@ def create_settings_window(store: SettingsStore):
     )
     widgets["microphone"] = microphone
 
-    compute_backend = _combo_box(Gtk, COMPUTE_BACKENDS, current.compute_backend)
-    attach(
-        "Compute backend",
-        "Host is the safe default. VM GPU uses the existing SSH tunnel only after strict readiness checks pass.",
-        compute_backend,
-    )
-    widgets["compute_backend"] = compute_backend
+    service_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+    endpoint_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    service_url = Gtk.Entry()
+    service_url.set_text(current.service_url)
+    service_url.set_placeholder_text("http://127.0.0.1:8791")
+    endpoint_row.pack_start(service_url, True, True, 0)
+    refresh_service = Gtk.Button(label="Refresh")
+    refresh_service.set_image(Gtk.Image.new_from_icon_name("view-refresh-symbolic", Gtk.IconSize.BUTTON))
+    refresh_service.set_always_show_image(True)
+    endpoint_row.pack_end(refresh_service, False, False, 0)
+    service_box.pack_start(endpoint_row, False, False, 0)
 
-    compute_backend_status = Gtk.Label(label=_compute_backend_status_text(current), xalign=0)
-    compute_backend_status.set_selectable(True)
-    compute_backend_status.set_ellipsize(Pango.EllipsizeMode.END)
+    service_status = Gtk.Label(label="Checking…", xalign=0)
+    service_status.set_name("service_status")
+    service_status.set_selectable(True)
+    service_box.pack_start(service_status, False, False, 0)
+    service_detail = Gtk.Label(label="", xalign=0, yalign=0)
+    service_detail.set_line_wrap(True)
+    service_detail.set_max_width_chars(70)
+    service_detail.set_selectable(True)
+    service_detail.get_style_context().add_class("dim-label")
+    service_box.pack_start(service_detail, False, False, 0)
+    service_checked = Gtk.Label(label="Not checked yet", xalign=0)
+    service_checked.get_style_context().add_class("dim-label")
+    service_box.pack_start(service_checked, False, False, 0)
     attach(
-        "Backend status",
-        "Shows requested versus active backend from the current dictation run when one is in progress.",
-        compute_backend_status,
+        "Transcription service",
+        "HTTP endpoint used for status and transcription. Use localhost, a private LAN IP, or a local SSH tunnel.",
+        service_box,
     )
+    widgets["service_url"] = service_url
 
     compute_type = _combo_box(Gtk, COMPUTE_TYPES, current.compute_type)
     attach(
@@ -311,25 +310,6 @@ def create_settings_window(store: SettingsStore):
         language,
     )
     widgets["language"] = language
-
-    model_status = Gtk.Label(label="Checking backend…", xalign=0)
-    model_status.set_name("model_status")
-    model_status.set_selectable(True)
-    model_status.set_ellipsize(Pango.EllipsizeMode.END)
-    attach(
-        "Model status",
-        "The transcription model is fixed for this release. Status updates after the first dictation loads it.",
-        model_status,
-    )
-
-    service_url = Gtk.Entry()
-    service_url.set_text(current.service_url)
-    attach(
-        "Local service URL",
-        "Loopback endpoint used by the tray. Keep this on localhost unless you deliberately run another local backend.",
-        service_url,
-    )
-    widgets["service_url"] = service_url
 
     delivery = _combo_box(Gtk, DELIVERY_MODES, current.delivery_mode)
     attach(
@@ -367,35 +347,45 @@ def create_settings_window(store: SettingsStore):
     )
     widgets["history_limit"] = history_limit
 
-    for name, title, description, placeholder in (
-        (
-            "initial_prompt",
-            "Initial prompt",
-            "Briefly describe the conversation context or writing style. This biases decoding; it is not a guaranteed instruction.",
-            "Example: Technical discussion about robotics, Python, and local AI tools.",
-        ),
-        (
-            "recognition_hints",
-            "Recognition hints",
-            "Add likely names and specialist terms, separated by commas. Hints bias spelling; they are not a guaranteed dictionary.",
-            "Example: Epsilon, OpenClaw, CTranslate2, faster-whisper",
-        ),
-    ):
+    def text_field(value: str, placeholder: str):
         view = Gtk.TextView()
         view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
         view.set_left_margin(8)
         view.set_right_margin(8)
         view.set_top_margin(7)
         view.set_bottom_margin(7)
-        view.get_buffer().set_text(getattr(current, name))
+        view.get_buffer().set_text(value)
         view.set_tooltip_text(placeholder)
         field_scroller = Gtk.ScrolledWindow()
         field_scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         field_scroller.set_shadow_type(Gtk.ShadowType.IN)
         field_scroller.set_min_content_height(90)
         field_scroller.add(view)
-        attach(title, description + " " + placeholder, field_scroller)
-        widgets[name] = view
+        return view, field_scroller
+
+    names_view, names_scroller = text_field(
+        current.recognition_hints,
+        "Example: Epsilon, OpenClaw, CTranslate2, Faster-Whisper",
+    )
+    attach(
+        "Names and terms",
+        "Exact names and specialist terms, separated by commas. They bias spelling but are not a guaranteed dictionary.",
+        names_scroller,
+    )
+    widgets["recognition_hints"] = names_view
+
+    style_view, style_scroller = text_field(
+        current.initial_prompt,
+        "Example: Okay, let’s inspect this carefully. The backend is healthy, but the status label is stale.",
+    )
+    style_expander = Gtk.Expander(label="Add a style example")
+    style_expander.add(style_scroller)
+    attach(
+        "Style example · Advanced",
+        "Leave empty unless transcripts repeatedly use the wrong casing, punctuation, or prose style. Use natural transcript text—not instructions or vocabulary.",
+        style_expander,
+    )
+    widgets["initial_prompt"] = style_view
 
     separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
     root.pack_start(separator, False, False, 0)
@@ -414,11 +404,39 @@ def create_settings_window(store: SettingsStore):
 
     cancel.connect("clicked", lambda _button: window.destroy())
 
-    def refresh_model_status() -> None:
-        status = _model_status_text(current.service_url, current.model)
-        GLib.idle_add(model_status.set_text, status)
+    refresh_generation = 0
 
-    threading.Thread(target=refresh_model_status, daemon=True).start()
+    def refresh_service_status(_button=None) -> None:
+        nonlocal refresh_generation
+        endpoint = service_url.get_text().strip().rstrip("/")
+        refresh_generation += 1
+        generation = refresh_generation
+        refresh_service.set_sensitive(False)
+        service_status.set_text("Checking…")
+        service_detail.set_text(endpoint or "Enter a service URL.")
+        service_checked.set_text("")
+
+        def worker() -> None:
+            status = _transcription_service_status(endpoint, current.model)
+            checked_at = datetime.now().strftime("%H:%M:%S")
+
+            def apply_status() -> bool:
+                # A slower response from an older endpoint must not overwrite a
+                # newer manual refresh after the URL field has changed.
+                if generation != refresh_generation:
+                    return False
+                service_status.set_text(status.summary)
+                service_detail.set_text(status.detail)
+                service_checked.set_text(f"Last checked {checked_at}")
+                refresh_service.set_sensitive(True)
+                return False
+
+            GLib.idle_add(apply_status)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    refresh_service.connect("clicked", refresh_service_status)
+    refresh_service_status()
 
     def save_settings(_button) -> None:
         values = asdict(current)
@@ -438,7 +456,21 @@ def create_settings_window(store: SettingsStore):
             elif isinstance(widget, Gtk.TextView):
                 buffer = widget.get_buffer()
                 values[name] = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True).strip()
-        settings = AppSettings.from_mapping(values)
+        try:
+            settings = AppSettings.from_mapping(values)
+        except ValueError as exc:
+            dialog = Gtk.MessageDialog(
+                transient_for=window,
+                modal=True,
+                message_type=Gtk.MessageType.ERROR,
+                buttons=Gtk.ButtonsType.OK,
+                text="Check the settings before saving.",
+            )
+            dialog.format_secondary_text(str(exc))
+            dialog.run()
+            dialog.destroy()
+            return
+
         store.save(settings)
         set_autostart(settings.start_at_login)
         try:

@@ -3,7 +3,6 @@ from types import SimpleNamespace
 
 import requests
 
-from epsilon_flow.settings import AppSettings
 from epsilon_flow import settings_window
 
 
@@ -31,47 +30,71 @@ def test_microphone_choices_use_descriptions_and_hide_monitor_sources(monkeypatc
     ]
 
 
-def test_model_status_reports_loaded_runtime(monkeypatch):
+def test_service_status_reports_loaded_runtime(monkeypatch):
     response = SimpleNamespace(
         raise_for_status=lambda: None,
         json=lambda: {
+            "ok": True,
             "model_loaded": True,
             "model": {
                 "model": "turbo",
-                "device": "cpu",
-                "compute_type": "int8",
+                "device": "cuda",
+                "compute_type": "float16",
             },
         },
     )
     monkeypatch.setattr(settings_window.requests, "get", lambda *args, **kwargs: response)
 
-    assert settings_window._model_status_text("http://127.0.0.1:8791", "ignored") == (
-        "Whisper large-v3-turbo · CPU / int8"
+    status = settings_window._transcription_service_status("http://127.0.0.1:8891", "ignored")
+
+    assert status.summary == "Online"
+    assert status.detail == "Whisper large-v3-turbo · CUDA / float16"
+
+
+def test_service_status_reports_first_load_state(monkeypatch):
+    response = SimpleNamespace(
+        raise_for_status=lambda: None,
+        json=lambda: {"ok": True, "model_loaded": False, "model": None},
     )
+    monkeypatch.setattr(settings_window.requests, "get", lambda *args, **kwargs: response)
+
+    status = settings_window._transcription_service_status("http://192.168.1.20:8791", "turbo")
+
+    assert status.summary == "Online"
+    assert status.detail == "Whisper large-v3-turbo · loads on first dictation"
 
 
-def test_model_status_handles_offline_backend(monkeypatch):
+def test_service_status_handles_offline_backend(monkeypatch):
     def fail(*args, **kwargs):
-        raise requests.ConnectionError("offline")
+        raise requests.ConnectionError("connection refused")
 
     monkeypatch.setattr(settings_window.requests, "get", fail)
 
-    assert settings_window._model_status_text("http://127.0.0.1:8791", "model") == (
-        "Whisper large-v3-turbo · backend offline"
+    status = settings_window._transcription_service_status("http://127.0.0.1:8791", "turbo")
+
+    assert status.summary == "Offline"
+    assert "connection refused" in status.detail
+
+
+def test_service_status_rejects_public_url_without_request(monkeypatch):
+    requested = []
+    monkeypatch.setattr(settings_window.requests, "get", lambda *args, **kwargs: requested.append(args))
+
+    status = settings_window._transcription_service_status("https://example.com", "turbo")
+
+    assert status.summary == "Invalid URL"
+    assert "private IP" in status.detail
+    assert requested == []
+
+
+def test_service_status_rejects_non_flow_health_response(monkeypatch):
+    response = SimpleNamespace(
+        raise_for_status=lambda: None,
+        json=lambda: {"status": "up"},
     )
+    monkeypatch.setattr(settings_window.requests, "get", lambda *args, **kwargs: response)
 
+    status = settings_window._transcription_service_status("http://127.0.0.1:8791", "turbo")
 
-def test_compute_backend_status_reports_requested_and_active_with_failure(tmp_path, monkeypatch):
-    current = tmp_path / "current.json"
-    current.write_text(json.dumps({
-        "transcription_backend": {
-            "requested_backend": "vm",
-            "active_backend": "local",
-            "vm_status": {"failure": {"code": "gpu_busy"}},
-        }
-    }))
-    monkeypatch.setattr(settings_window, "state_dir", lambda: tmp_path)
-
-    assert settings_window._compute_backend_status_text(AppSettings(compute_backend="vm")) == (
-        "Requested VM GPU; active Host · gpu_busy"
-    )
+    assert status.summary == "Invalid response"
+    assert "ok=true" in status.detail

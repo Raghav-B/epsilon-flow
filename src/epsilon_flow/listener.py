@@ -223,7 +223,6 @@ class DictationListener(Gtk.Window):
         self.last_allocation_size: tuple[int, int] | None = None
         self.active_device: str | None = None
         self.fallback_reason: str | None = None
-        self.backend_selection: dict | None = None
         self.set_decorated(False)
         self.set_keep_above(True)
         # Notification windows float well, but many WMs refuse to focus them.
@@ -437,7 +436,6 @@ class DictationListener(Gtk.Window):
 
     def present_for_start(self) -> None:
         self.drawer_revealer.set_reveal_child(False)
-        self.backend_selection = None
         self.recording_started = time.monotonic()
         self.limit_warning_visible = False
         self.elapsed.set_text("00:00 / 1:00:00")
@@ -635,32 +633,9 @@ class DictationListener(Gtk.Window):
         self.fallback_reason = fallback_reason
         self.refresh_device_toast()
 
-    def set_backend_selection(self, selection: dict | None) -> bool:
-        self.backend_selection = selection
-        self.refresh_device_toast()
-        return False
-
     def refresh_device_toast(self) -> None:
         message = ""
-        if self.backend_selection and self.backend_selection.get("requested_backend") == "vm":
-            active_backend = self.backend_selection.get("active_backend")
-            vm_status = self.backend_selection.get("vm_status")
-            failure = vm_status.get("failure") if isinstance(vm_status, dict) else None
-            if active_backend == "vm":
-                message = "VM GPU transcription active"
-            elif active_backend == "unavailable":
-                message = "VM unavailable; no local fallback is running"
-            elif isinstance(failure, dict):
-                code = failure.get("code")
-                if code == "gpu_busy":
-                    message = "VM GPU busy; using Host"
-                elif code == "host_key_verification_failed":
-                    message = "VM identity check failed; using Host"
-                else:
-                    message = "VM unavailable; using Host"
-            else:
-                message = "Checking VM GPU backend…"
-        elif self.fallback_reason == "cuda_oom":
+        if self.fallback_reason == "cuda_oom":
             message = "CUDA memory full; retrying on CPU"
         elif self.fallback_reason:
             message = "CUDA unavailable; using CPU"

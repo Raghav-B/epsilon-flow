@@ -1,7 +1,7 @@
 """Validated, private settings for Epsilon Flow."""
 from __future__ import annotations
 
-import getpass
+import ipaddress
 import json
 import os
 import tempfile
@@ -9,18 +9,23 @@ import time
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from platformdirs import user_config_path, user_state_path
-
-from .vm_backend import BackendName, VmBackendConfig
 
 
 DELIVERY_MODES = {"copy", "paste", "type", "none"}
 DEVICES = {"auto", "cpu", "cuda"}
-COMPUTE_BACKENDS = {"local", "vm"}
 FIXED_MODEL = "turbo"
-LOCAL_SERVICE_URL = "http://127.0.0.1:8794"
-LEGACY_ROUTER_URL = "http://127.0.0.1:8791"
+LOCAL_SERVICE_URL = "http://127.0.0.1:8791"
+LEGACY_LOCAL_FALLBACK_URL = "http://127.0.0.1:8794"
+LEGACY_VM_TUNNEL_URL = "http://127.0.0.1:8891"
+PRIVATE_SERVICE_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),
+)
 
 
 @dataclass
@@ -38,7 +43,6 @@ class AppSettings:
     initial_prompt: str = ""
     recognition_hints: str = ""
     service_url: str = LOCAL_SERVICE_URL
-    compute_backend: BackendName = "local"
 
     @classmethod
     def from_mapping(cls, payload: dict[str, Any]) -> "AppSettings":
@@ -47,10 +51,15 @@ class AppSettings:
         # Model choice is intentionally hidden in this release. Migrate stale
         # IDs from older settings files onto Faster-Whisper's supported alias.
         values["model"] = FIXED_MODEL
-        # Flow now owns a direct VM tunnel. Do not use the old global router as
-        # its local fallback because that router can be configured back to VM.
-        if values.get("service_url") == LEGACY_ROUTER_URL:
+        # Older private builds selected the VM separately and kept the host
+        # fallback URL in service_url. Preserve that user's working route by
+        # migrating the selection to the tunnel endpoint they already used.
+        if payload.get("compute_backend") == "vm":
+            values["service_url"] = LEGACY_VM_TUNNEL_URL
+        elif values.get("service_url") == LEGACY_LOCAL_FALLBACK_URL:
             values["service_url"] = LOCAL_SERVICE_URL
+        if isinstance(values.get("service_url"), str):
+            values["service_url"] = values["service_url"].strip().rstrip("/")
         settings = cls(**values)
         settings.validate()
         return settings
@@ -60,12 +69,9 @@ class AppSettings:
             raise ValueError(f"invalid delivery mode: {self.delivery_mode}")
         if self.device not in DEVICES:
             raise ValueError(f"invalid device: {self.device}")
-        if self.compute_backend not in COMPUTE_BACKENDS:
-            raise ValueError(f"invalid compute backend: {self.compute_backend}")
         if not 1 <= self.history_limit <= 1000:
             raise ValueError("history limit must be between 1 and 1000")
-        if not self.service_url.startswith("http://127.0.0.1:") and not self.service_url.startswith("http://localhost:"):
-            raise ValueError("service URL must use localhost")
+        validate_service_url(self.service_url)
 
     def prompt(self) -> str:
         initial_prompt = self.initial_prompt.strip()
@@ -74,8 +80,37 @@ class AppSettings:
         if initial_prompt:
             parts.append(initial_prompt)
         if recognition_hints:
-            parts.append(f"Recognition hints: {recognition_hints}")
+            parts.append(recognition_hints)
         return "\n\n".join(parts)
+
+
+def validate_service_url(service_url: str) -> None:
+    """Allow only local, private-LAN, or locally tunnelled HTTP services."""
+    try:
+        parsed = urlsplit(service_url)
+    except ValueError as exc:
+        raise ValueError("service URL must be a valid URL") from exc
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("service URL must be a complete http:// or https:// URL")
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise ValueError("service URL port must be a number between 1 and 65535") from exc
+    if parsed.username or parsed.password:
+        raise ValueError("service URL authentication is not supported yet")
+    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+        raise ValueError("service URL must not include a path, query, or fragment")
+
+    host = parsed.hostname.lower()
+    if host == "localhost":
+        return
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError as exc:
+        raise ValueError("service URL host must be localhost or a private IP address") from exc
+    if address.is_loopback or any(address in network for network in PRIVATE_SERVICE_NETWORKS):
+        return
+    raise ValueError("service URL host must be localhost or a private IP address")
 
 
 class SettingsStore:
@@ -120,37 +155,3 @@ class SettingsStore:
 def state_dir() -> Path:
     override = os.environ.get("EPSILON_FLOW_STATE_DIR")
     return Path(override).expanduser() if override else Path(user_state_path("epsilon-flow", appauthor=False))
-
-
-def _integer_env(name: str, default: int) -> int:
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    try:
-        return int(value)
-    except ValueError:
-        return default
-
-
-def vm_backend_config(config_dir: Path | None = None, state_directory: Path | None = None) -> VmBackendConfig:
-    """Build the private VM route used only when the VM backend is requested.
-
-    Host mode remains the default. These machine defaults match the current
-    generic GPU VM: QEMU exposes guest SSH on host ``127.0.0.1:2222`` and the
-    Flow guest backend is reached through a host tunnel on ``127.0.0.1:8891``.
-    Environment overrides keep the public package usable on other machines
-    without changing ordinary local dictation behavior.
-    """
-    root = Path(config_dir or user_config_path("epsilon-flow", appauthor=False))
-    runtime_state_dir = Path(state_directory or state_dir())
-    return VmBackendConfig(
-        ssh_host=os.environ.get("EPSILON_FLOW_VM_SSH_HOST", "127.0.0.1"),
-        ssh_user=os.environ.get("EPSILON_FLOW_VM_SSH_USER", getpass.getuser()),
-        ssh_port=_integer_env("EPSILON_FLOW_VM_SSH_PORT", 2222),
-        known_hosts_path=Path(os.environ.get("EPSILON_FLOW_VM_KNOWN_HOSTS", root / "vm_known_hosts")).expanduser(),
-        state_path=runtime_state_dir / "vm-tunnel.json",
-        local_host="127.0.0.1",
-        local_port=_integer_env("EPSILON_FLOW_VM_TUNNEL_PORT", 8891),
-        guest_host="127.0.0.1",
-        guest_port=_integer_env("EPSILON_FLOW_VM_GUEST_PORT", 8791),
-    )

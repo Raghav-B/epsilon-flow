@@ -7,7 +7,6 @@ import pytest
 
 from epsilon_flow import dictation
 from epsilon_flow.settings import AppSettings
-from epsilon_flow.vm_backend import BackendSelection, VmBackendFailure, VmBackendProgress, VmBackendStatus
 
 
 def pcm_at_decibels(decibels: float, sample_count: int = 64) -> bytes:
@@ -76,102 +75,74 @@ def test_record_audio_meters_the_same_ffmpeg_input(tmp_path, monkeypatch):
     assert levels == [pytest.approx(0.5, abs=0.01), 0.0]
 
 
-def test_transcription_route_uses_verified_vm_tunnel():
-    status = VmBackendStatus(
-        ready=True,
-        progress=(VmBackendProgress("ready", "ready"),),
-        tunnel_url="http://127.0.0.1:8891",
-    )
-    selection = BackendSelection(requested_backend="vm", active_backend="vm", vm_status=status)
+def test_transcribe_posts_directly_to_the_configured_service(tmp_path, monkeypatch):
+    audio_path = tmp_path / "capture.wav"
+    audio_path.write_bytes(b"wav")
+    captured = {}
 
-    assert dictation.transcription_service_url(AppSettings(), selection) == "http://127.0.0.1:8891"
+    class FakeResponse:
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        @staticmethod
+        def json():
+            return {"text": "hello"}
+
+    def fake_post(url, *, data, files, timeout):
+        captured["url"] = url
+        captured["data"] = data
+        captured["filename"] = files["file"][0]
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(dictation.requests, "post", fake_post)
+    settings = AppSettings(
+        service_url="http://127.0.0.1:8891",
+        initial_prompt="Okay, let us inspect this.",
+        recognition_hints="Epsilon, CTranslate2",
+    )
+
+    result = dictation.transcribe(audio_path, settings)
+
+    assert result == {"text": "hello"}
+    assert captured["url"] == "http://127.0.0.1:8891/transcribe"
+    assert captured["data"]["initial_prompt"] == (
+        "Okay, let us inspect this.\n\nEpsilon, CTranslate2"
+    )
+    assert captured["filename"] == "capture.wav"
+    assert captured["timeout"] == 600
 
 
-def test_run_dictation_falls_back_to_local_and_surfaces_vm_failure(tmp_path, monkeypatch):
-    captured = {"phases": [], "backend_callbacks": []}
-    failure = VmBackendFailure(
-        "host_key_verification_failed",
-        "VM SSH host key did not match.",
-        {"known_hosts_path": str(tmp_path / "vm_known_hosts")},
-        retryable=False,
-    )
-    status = VmBackendStatus(
-        ready=False,
-        progress=(VmBackendProgress("ssh_probe", "Probing VM SSH."),),
-        failure=failure,
-    )
-    selection = BackendSelection(requested_backend="vm", active_backend="local", vm_status=status)
+def test_run_dictation_uses_one_configured_service_without_backend_selection(tmp_path, monkeypatch):
+    captured = {"phases": []}
 
     def fake_record_audio(path, settings, controller, **kwargs):
         path.write_bytes(b"wav")
         return True
 
-    def fake_resolve(settings):
-        return selection, settings.service_url
-
-    def fake_transcribe(path, settings, service_url=None):
-        captured["service_url"] = service_url
+    def fake_transcribe(path, settings):
+        captured["service_url"] = settings.service_url
         return {"text": "hello"}
 
     controller = SimpleNamespace(
         set_phase=lambda phase, **metadata: captured["phases"].append((phase, metadata)),
     )
     monkeypatch.setattr(dictation, "record_audio", fake_record_audio)
-    monkeypatch.setattr(dictation, "resolve_transcription_backend", fake_resolve)
     monkeypatch.setattr(dictation, "transcribe", fake_transcribe)
 
     result = dictation.run_dictation(
-        AppSettings(compute_backend="vm", history_enabled=False, delivery_mode="none"),
+        AppSettings(
+            service_url="http://192.168.1.40:8791",
+            history_enabled=False,
+            delivery_mode="none",
+        ),
         controller,
-        on_backend_selection=captured["backend_callbacks"].append,
     )
 
-    assert captured["service_url"] == "http://127.0.0.1:8794"
-    assert captured["phases"][0] == ("selecting_backend", {"requested_backend": "vm"})
-    transcribing_metadata = captured["phases"][1][1]
-    assert transcribing_metadata["transcription_backend"]["requested_backend"] == "vm"
-    assert transcribing_metadata["transcription_backend"]["active_backend"] == "local"
-    assert transcribing_metadata["transcription_backend"]["vm_status"]["failure"]["code"] == (
-        "host_key_verification_failed"
-    )
-    assert captured["backend_callbacks"] == [transcribing_metadata["transcription_backend"]]
+    assert captured["service_url"] == "http://192.168.1.40:8791"
+    assert captured["phases"] == [
+        ("transcribing", {"service_url": "http://192.168.1.40:8791"}),
+        ("delivering", {}),
+    ]
     assert result["text"] == "hello"
-    assert result["transcription_backend"] == transcribing_metadata["transcription_backend"]
-
-
-def test_resolve_backend_reports_unavailable_when_vm_and_direct_local_routes_fail(monkeypatch):
-    failure = VmBackendFailure("gpu_busy", "GPU is busy.", retryable=True)
-    selection = BackendSelection(
-        requested_backend="vm",
-        active_backend="local",
-        vm_status=VmBackendStatus(ready=False, progress=(), failure=failure),
-    )
-
-    monkeypatch.setattr(dictation, "select_backend", lambda *args, **kwargs: selection)
-    monkeypatch.setattr(dictation, "local_service_is_ready", lambda url: False)
-
-    resolved, service_url = dictation.resolve_transcription_backend(AppSettings(compute_backend="vm"))
-
-    assert resolved.active_backend == "unavailable"
-    assert service_url is None
-
-
-def test_run_dictation_returns_clear_error_when_no_backend_is_available(tmp_path, monkeypatch):
-    selection = BackendSelection(
-        requested_backend="vm",
-        active_backend="unavailable",
-        vm_status=VmBackendStatus(ready=False, progress=()),
-    )
-
-    def fake_record_audio(path, settings, controller, **kwargs):
-        path.write_bytes(b"wav")
-        return True
-
-    monkeypatch.setattr(dictation, "record_audio", fake_record_audio)
-    monkeypatch.setattr(dictation, "resolve_transcription_backend", lambda settings: (selection, None))
-
-    controller = SimpleNamespace(set_phase=lambda *args, **kwargs: None)
-    result = dictation.run_dictation(AppSettings(compute_backend="vm"), controller)
-
-    assert result["transcription_backend"]["active_backend"] == "unavailable"
-    assert "local fallback is not running" in result["error"]
