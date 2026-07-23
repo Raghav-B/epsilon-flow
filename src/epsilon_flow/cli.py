@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 import shutil
 import socket
@@ -30,6 +31,16 @@ def trigger() -> int:
         return 1
 
 
+def set_service_url(service_url: str, store: SettingsStore | None = None) -> int:
+    """Update the transcription endpoint through Flow's validated settings boundary."""
+    settings_store = store or SettingsStore()
+    current = settings_store.load()
+    updated = replace(current, service_url=service_url.strip().rstrip("/"))
+    settings_store.save(updated)
+    print(updated.service_url)
+    return 0
+
+
 def doctor() -> int:
     settings = SettingsStore().load()
     checks = {
@@ -55,6 +66,11 @@ def main() -> int:
     subparsers.add_parser("settings", help="open GTK settings")
     subparsers.add_parser("doctor", help="check desktop and service dependencies")
     subparsers.add_parser("show-settings", help="print settings JSON")
+    service_url_parser = subparsers.add_parser(
+        "set-service-url",
+        help="set the local or private transcription service endpoint",
+    )
+    service_url_parser.add_argument("service_url")
     apply_parser = subparsers.add_parser("apply-integrations", help="apply saved hotkey and autostart settings")
     apply_parser.add_argument("--no-hotkey", action="store_true")
     args = parser.parse_args()
@@ -80,6 +96,8 @@ def main() -> int:
         from dataclasses import asdict
         print(json.dumps(asdict(SettingsStore().load()), indent=2))
         return 0
+    if args.command == "set-service-url":
+        return set_service_url(args.service_url)
     if args.command == "apply-integrations":
         settings = SettingsStore().load()
         set_autostart(settings.start_at_login)
