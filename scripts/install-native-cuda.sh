@@ -35,7 +35,18 @@ fi
 # isolated inside the backend environment rather than changing system Python.
 uv pip install --python "$BACKEND_PYTHON" nvidia-cublas-cu12 'nvidia-cudnn-cu12==9.*'
 CUDA_LIBRARY_PATH=$(
-    "$BACKEND_PYTHON" -c 'import os, nvidia.cublas.lib, nvidia.cudnn.lib; print(os.path.dirname(nvidia.cublas.lib.__file__) + ":" + os.path.dirname(nvidia.cudnn.lib.__file__))'
+    "$BACKEND_PYTHON" - <<'PY'
+import importlib.util
+
+paths = []
+for module in ("nvidia.cublas.lib", "nvidia.cudnn.lib"):
+    spec = importlib.util.find_spec(module)
+    locations = list(spec.submodule_search_locations or []) if spec else []
+    if not locations:
+        raise SystemExit(f"Could not locate {module}")
+    paths.append(locations[0])
+print(":".join(paths))
+PY
 )
 
 mkdir -p "$DROP_IN_DIR"
