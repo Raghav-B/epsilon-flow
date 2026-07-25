@@ -140,7 +140,7 @@ def main() -> int:
     threading.Thread(target=listen_for_commands, daemon=True).start()
 
     indicator = AppIndicator.Indicator.new(
-        "epsilon-flow", "audio-input-microphone-symbolic", AppIndicator.IndicatorCategory.APPLICATION_STATUS
+        "epsilon-flow", "com.epsilon.flow", AppIndicator.IndicatorCategory.APPLICATION_STATUS
     )
     indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE)
     menu = Gtk.Menu()

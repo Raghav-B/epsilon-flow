@@ -6,6 +6,9 @@ INSTALL_DIR=${EPSILON_FLOW_INSTALL_DIR:-"$HOME/.local/share/epsilon-flow"}
 DESKTOP_VENV="$INSTALL_DIR/.venv-desktop"
 BACKEND_VENV="$INSTALL_DIR/.venv-backend"
 SYSTEM_PYTHON=${EPSILON_FLOW_SYSTEM_PYTHON:-/usr/bin/python3}
+DESKTOP_DIR=${XDG_DATA_HOME:-"$HOME/.local/share"}/applications
+ICON_THEME_DIR=${XDG_DATA_HOME:-"$HOME/.local/share"}/icons/hicolor
+ICON_NAME=com.epsilon.flow
 
 if [[ ! -x "$SYSTEM_PYTHON" ]]; then
     printf 'The distro Python is required at %s. Install python3 and python3-venv.\n' "$SYSTEM_PYTHON" >&2
@@ -27,7 +30,7 @@ if ! command -v curl >/dev/null 2>&1; then
     exit 1
 fi
 
-mkdir -p "$INSTALL_DIR"
+mkdir -p "$INSTALL_DIR" "$DESKTOP_DIR" "$ICON_THEME_DIR/scalable/apps"
 
 # Reinstalls replace both environments in place. Stop managed and legacy tray
 # processes first so the new service cannot race an old Unix command socket.
@@ -51,6 +54,33 @@ for command in epsilon-flow epsilon-flow-tray; do
     ln -sfn "$DESKTOP_VENV/bin/$command" "$HOME/.local/bin/$command"
 done
 ln -sfn "$BACKEND_VENV/bin/epsilon-flow-backend" "$HOME/.local/bin/epsilon-flow-backend"
+install -m 0644 "$ROOT/assets/icons/$ICON_NAME.svg" "$ICON_THEME_DIR/scalable/apps/$ICON_NAME.svg"
+cat >"$HOME/.local/bin/epsilon-flow-launch" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+systemctl --user start epsilon-flow-backend.service epsilon-flow-tray.service
+exec "$HOME/.local/bin/epsilon-flow" settings
+EOF
+chmod 0755 "$HOME/.local/bin/epsilon-flow-launch"
+cat >"$DESKTOP_DIR/$ICON_NAME.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Epsilon Flow
+Comment=Local dictation tray and transcription settings
+Exec=$HOME/.local/bin/epsilon-flow-launch
+Icon=$ICON_NAME
+Terminal=false
+Categories=AudioVideo;Audio;Utility;
+StartupNotify=true
+EOF
+chmod 0644 "$DESKTOP_DIR/$ICON_NAME.desktop"
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "$DESKTOP_DIR" >/dev/null 2>&1 || true
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q "$ICON_THEME_DIR" >/dev/null 2>&1 || true
+fi
 
 EPSILON_FLOW_BACKEND_EXEC="$BACKEND_VENV/bin/epsilon-flow-backend" \
 EPSILON_FLOW_TRAY_EXEC="$DESKTOP_VENV/bin/epsilon-flow-tray" \
@@ -76,5 +106,5 @@ if ! curl --fail --silent --max-time 1 http://127.0.0.1:8791/health >/dev/null 2
 fi
 
 printf 'Installed Epsilon Flow in %s\n' "$INSTALL_DIR"
-printf 'The native backend and desktop tray services are installed.\n'
+printf 'The native backend, desktop tray services, launcher, and icon are installed.\n'
 printf 'Use scripts/service.sh native-status to inspect both services.\n'
